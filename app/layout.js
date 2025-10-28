@@ -1,5 +1,7 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { Sidebar } from "../components/sidebar";
+import Providers from "./providers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,11 +20,38 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+            (function() {
+              try {
+                const ls = localStorage.getItem('theme');
+                const m = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                const root = document.documentElement;
+                root.classList.remove('light','dark');
+                if (ls === 'light' || ls === 'dark') {
+                  root.classList.add(ls);
+                } else {
+                  // 'system' or unset: add 'dark' class only if system prefers dark for initial paint
+                  if (m) root.classList.add('dark');
+                }
+              } catch (_) {}
+            })();
+          `,
+          }}
+        />
+      </head>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        <Providers>
+          <div className="min-h-dvh flex">
+            <div className="w-64 shrink-0">
+              <Sidebar />
+            </div>
+            <main className="flex-1 p-4 md:p-6">{children}</main>
+          </div>
+        </Providers>
       </body>
     </html>
   );

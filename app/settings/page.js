@@ -14,6 +14,12 @@ export default function Settings() {
   return (
     <div className="space-y-3">
       <div className="text-xl font-semsibold">Users</div>
+       <button
+        onClick={async ()=>{ await sb.auth.signOut(); window.location.href='/signin'; }}
+        className="text-sm underline"
+      >
+        Sign out
+      </button>
       <div className="grid gap-2">
         {users.map((u) => (
           <div key={u.id} className="p-3 rounded-xl border dark:border-neutral-800 bg-white dark:bg-neutral-900">

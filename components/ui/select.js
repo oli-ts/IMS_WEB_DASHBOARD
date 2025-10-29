@@ -6,7 +6,7 @@ import * as Dropdown from "@radix-ui/react-dropdown-menu";
 export function Select({ items = [], onSelect, triggerLabel = "Select", align = "start" }) {
   return (
     <Dropdown.Root>
-      <Dropdown.Trigger className="h-10 px-4 rounded-xl border border-neutral-300 bg-white dark:bg-neutral-900 dark:border-neutral-700 dark:text-neutral-100">
+      <Dropdown.Trigger className="h-10 px-4 rounded-xl border border-neutral-300 bg-white dark:bg-neutral-900 dark:border-neutral-700 dark:text-neutral-100 text-nowrap">
         {triggerLabel}
       </Dropdown.Trigger>
       <Dropdown.Content align={align} className="bg-white dark:bg-neutral-900 dark:border-neutral-700 rounded-xl shadow border p-1">

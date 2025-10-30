@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabaseBrowser } from "../../../lib/supabase-browser";
 import { Card, CardContent } from "../../../components/ui/card";
+import { Input } from "../../../components/ui/input";
+import { Button } from "../../../components/ui/button";
+import { toast } from "sonner";
 
 export default function VanDetailClient({ vanId }) {
   const sb = supabaseBrowser();
@@ -13,14 +16,14 @@ export default function VanDetailClient({ vanId }) {
   const [itemMap, setItemMap] = useState({});
   const [exceptions, setExceptions] = useState([]);
   const channelRef = useRef(null);
+  const [serviceEntry, setServiceEntry] = useState("");
+  const [savingService, setSavingService] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const { data: vs } = await sb
+         const { data: vs } = await sb
         .from("vans")
-        .select(
-          "id, reg_number, assigned_team_id, current_job_id, teams(name)"
-        )
+        .select("id, reg_number, assigned_team_id, current_job_id, make, model, mot_date, service_history, photo_url, teams(name)")
         .eq("id", vanId)
         .single();
       setVan(vs || null);
@@ -130,9 +133,9 @@ export default function VanDetailClient({ vanId }) {
       <div className="flex items-center justify-between">
         <div>
           <div className="text-sm text-neutral-500">Van</div>
-          <div className="text-2xl font-semibold">
-            {van?.reg_number || "—"}
-          </div>
+          <div className="text-2xl font-semibold">{van?.reg_number || "—"}</div>
+          <div className="text-sm">Make/Model: {(van?.make || "—") + " " + (van?.model || "")}</div>
+          <div className="text-sm">MOT: {van?.mot_date ? new Date(van.mot_date).toLocaleDateString() : "—"}</div>
           <div className="text-sm">Team: {van?.teams?.name || "—"}</div>
         </div>
         {manifest && (
@@ -141,6 +144,68 @@ export default function VanDetailClient({ vanId }) {
           </Link>
         )}
       </div>
+       {/* Van Photo */}
+      <Card>
+        <CardContent>
+          <div className="p-3">
+            <div className="font-semibold mb-2">Photo</div>
+            <div className="aspect-square rounded-2xl overflow-hidden bg-neutral-100 border max-w-sm">
+              {van?.photo_url ? (
+                <img src={van.photo_url} alt={`${van?.reg_number} photo`} className="h-full w-full object-cover" />
+              ) : (
+                <div className="h-full w-full grid place-items-center text-sm text-neutral-400">No image</div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <div className="p-3">
+            <div className="font-semibold mb-2">Add Service Entry</div>
+            <div className="grid gap-2 sm:grid-cols-5">
+              <div className="sm:col-span-4">
+                <Input
+                  placeholder="Add service note (e.g. 2025-06-02: Brake pads)"
+                  value={serviceEntry}
+                  onChange={(e) => setServiceEntry(e.target.value)}
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <Button
+                  type="button"
+                  disabled={savingService || !serviceEntry.trim()}
+                  onClick={async () => {
+                    if (!serviceEntry.trim()) return;
+                    try {
+                      setSavingService(true);
+                      const stamp = new Date().toISOString().slice(0, 10);
+                      const newLine = `${stamp}: ${serviceEntry.trim()}`;
+                      const combined = van?.service_history ? `${van.service_history}\n${newLine}` : newLine;
+                      const { error: upErr } = await sb
+                        .from("vans")
+                        .update({ service_history: combined })
+                        .eq("id", vanId);
+                      if (upErr) throw upErr;
+                      setVan((prev) => ({ ...(prev || {}), service_history: combined }));
+                      setServiceEntry("");
+                      toast.success("Service history updated");
+                    } catch (e) {
+                      console.error(e);
+                      toast.error(e.message || "Failed to update service history");
+                    } finally {
+                      setSavingService(false);
+                    }
+                  }}
+                >
+                  {savingService ? "Saving..." : "Add"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Stat label="Onboard (qty)" value={kpi.onboardQty} />
@@ -204,6 +269,15 @@ export default function VanDetailClient({ vanId }) {
           </div>
         </CardContent>
       </Card>
+            <Card>
+        <CardContent>
+          <div className="p-3">
+            <div className="font-semibold mb-2">Service History</div>
+           <div className="text-sm whitespace-pre-wrap">{van?.service_history || "—"}</div>
+          </div>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

@@ -11,7 +11,6 @@ const links = [
   { href: "/transfers", label: "Transfers" },
   { href: "/templates", label: "Templates" },
   { href: "/reporting", label: "Reporting" },
-  { href: "/labels", label: "QR Labels" },
   { href: "/settings", label: "Settings" },
 ];
 

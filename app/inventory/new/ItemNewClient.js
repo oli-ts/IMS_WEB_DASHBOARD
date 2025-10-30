@@ -158,11 +158,14 @@ export default function ItemNewClient() {
     return (
       !!selectedClass &&
       !!warehouse?.value &&
+      !!zone?.value &&
+      !!bay?.value &&
+      !!shelf?.value &&
       !!name &&
       !!unit &&
       Number(qty) >= 0
     );
-  }, [selectedClass, warehouse, name, unit, qty]);
+  }, [selectedClass, warehouse, zone, bay, shelf, name, unit, qty]);
 
   function genRandom(n = 5) {
     const digits = "0123456789";

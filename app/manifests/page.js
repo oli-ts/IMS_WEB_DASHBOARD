@@ -19,7 +19,9 @@ export default function Manifests() {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Active Manifests</h1>
-        <Button variant="outline">New Manifest</Button>
+          <Link href="/manifests/new">
+          <Button variant="outline">New Manifest</Button>
+        </Link>
       </div>
       <div className="grid gap-2">
         {rows.map((m) => (

@@ -14,6 +14,15 @@ export default function InventoryPage() {
   const [warehouse, setWarehouse] = useState(null);
   const [warehouses, setWarehouses] = useState([]);
   const [view, setView] = useState("grid");
+  const [brand, setBrand] = useState(null);
+  const [brands, setBrands] = useState([]);
+  const [classification, setClassification] = useState(null);
+  const [classifications, setClassifications] = useState([]);
+  const [status, setStatus] = useState(null);
+  const [statuses, setStatuses] = useState([]);
+  const [zoneMap, setZoneMap] = useState({});
+  const [bayMap, setBayMap] = useState({});
+  const [shelfMap, setShelfMap] = useState({});
 
   useEffect(() => {
     (async () => {
@@ -38,10 +47,38 @@ export default function InventoryPage() {
     })();
   }, [warehouse]);
 
+  // Load zones/bays/shelfs maps for display labels
+  useEffect(() => {
+    (async () => {
+      const [z, b, s] = await Promise.all([
+        sb.from("zones").select("id,name"),
+        sb.from("bays").select("id,label"),
+        sb.from("shelfs").select("id,label"),
+      ]);
+      const zMap = Object.fromEntries(((z.data || [])).map((r) => [r.id, r.name]));
+      const bMap = Object.fromEntries(((b.data || [])).map((r) => [r.id, r.label]));
+      const sMap = Object.fromEntries(((s.data || [])).map((r) => [r.id, r.label]));
+      setZoneMap(zMap);
+      setBayMap(bMap);
+      setShelfMap(sMap);
+    })();
+  }, []);
+
+  // Build dropdown options from loaded items
+  useEffect(() => {
+    const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+    const brandVals = uniq((items || []).map((i) => (i.brand || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
+    const classVals = uniq((items || []).map((i) => (i.classification || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
+    const statusVals = uniq((items || []).map((i) => (i.status || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
+
+    setBrands([{ value: "", label: "None" }, ...brandVals.map((v) => ({ value: v, label: v }))]);
+    setClassifications([{ value: "", label: "None" }, ...classVals.map((v) => ({ value: v, label: v }))]);
+    setStatuses([{ value: "", label: "None" }, ...statusVals.map((v) => ({ value: v, label: v }))]);
+  }, [items]);
+
   const filtered = useMemo(
     () =>
       items.filter((i) => {
-        if (!q) return true;
         const hay = (
           i.uid +
           " " +
@@ -51,9 +88,13 @@ export default function InventoryPage() {
           " " +
           (i.model || "")
         ).toLowerCase();
-        return hay.includes(q.toLowerCase());
+        if (q && !hay.includes(q.toLowerCase())) return false;
+        if (brand?.value && (i.brand || "") !== brand.value) return false;
+        if (classification?.value && (i.classification || "") !== classification.value) return false;
+        if (status?.value && (i.status || "") !== status.value) return false;
+        return true;
       }),
-    [items, q]
+    [items, q, brand, classification, status]
   );
 
   return (
@@ -76,7 +117,7 @@ export default function InventoryPage() {
         </Button>
         </div>
         <div className="flex items-center gap-2 w-full justify-end">
-        <div className="flex gap-2 items-flex w-1/3">
+        <div className="flex gap-2 items-flex w-full max-w-6xl justify-end">
           <Input
             placeholder="Search UID, name, brand, model…"
             value={q}
@@ -86,6 +127,21 @@ export default function InventoryPage() {
             items={warehouses}
             triggerLabel={warehouse?.label || "All Warehouses"}
             onSelect={setWarehouse}
+          />
+          <Select
+            items={brands}
+            triggerLabel={brand?.label || "All Brands"}
+            onSelect={setBrand}
+          />
+          <Select
+            items={classifications}
+            triggerLabel={classification?.label || "All Classifications"}
+            onSelect={setClassification}
+          />
+          <Select
+            items={statuses}
+            triggerLabel={status?.label || "All Statuses"}
+            onSelect={setStatus}
           />
         </div>
         <Link href="/inventory/new">
@@ -131,6 +187,18 @@ export default function InventoryPage() {
                 <div className="text-sm">
                   Loc: {i.location_last_seen || "—"}
                 </div>
+                <div className="text-sm">
+                  {(() => {
+                    const parts = [];
+                    const z = zoneMap[i.zone_id];
+                    const b = bayMap[i.bay_id];
+                    const s = shelfMap[i.shelf_id];
+                    if (z) parts.push(`Zone: ${z}`);
+                    if (b) parts.push(`Bay: ${b}`);
+                    if (s) parts.push(`Shelf: ${s}`);
+                    return parts.length ? parts.join(" · ") : (i.location_last_seen || "-");
+                  })()}
+                </div>
                 <div className="text-sm">Status: {i.status}</div>
                 <div className="mt-2">
                   <Link href={`/inventory/${encodeURIComponent(i.uid)}`}>
@@ -175,7 +243,7 @@ export default function InventoryPage() {
                       <td className="py-2 pr-3">{i.classification}</td>
                       <td className="py-2 pr-3">{i.brand}</td>
                       <td className="py-2 pr-3">{i.quantity_total}</td>
-                      <td className="py-2 pr-3">{i.location_last_seen || "-"}</td>
+                      <td className="py-2 pr-3">{(() => { const parts = []; const z = zoneMap[i.zone_id]; const b = bayMap[i.bay_id]; const s = shelfMap[i.shelf_id]; if (z) parts.push(`Zone: ${z}`); if (b) parts.push(`Bay: ${b}`); if (s) parts.push(`Shelf: ${s}`); return parts.length ? parts.join(" · ") : (i.location_last_seen || "-"); })()}</td>
                       <td className="py-2 pr-3">{i.status}</td>
                       <td className="py-2 pr-3">
                         <Link href={`/inventory/${encodeURIComponent(i.uid)}`}>

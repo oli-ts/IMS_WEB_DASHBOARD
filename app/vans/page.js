@@ -4,6 +4,7 @@ import Link from "next/link";
 import { supabaseBrowser } from "../../lib/supabase-browser.js";
 import { Card, CardContent } from "../../components/ui/card.js";
 import { Input } from "../../components/ui/input.js";
+import { Button } from "@/components/ui/button.js";
 
 export default function VansPage() {
   const sb = supabaseBrowser();
@@ -15,9 +16,7 @@ export default function VansPage() {
       // Fetch vans
       const { data: vs } = await sb
         .from("vans")
-        .select(
-          "id, reg_number, assigned_team_id, current_job_id, teams(name)"
-        );
+        .select('id, reg_number, make, model, mot_date, photo_url, assigned_team_id, current_job_id, teams(name)');
 
       // For each van, fetch its active manifest + job (FK on active_manifests.job_id allows join)
       const withManifests = await Promise.all(
@@ -49,20 +48,28 @@ export default function VansPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 items-center">
-        <Input
-          placeholder="Search by reg or job…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+      <div className="flex gap-2 items-center justify-between">
+        <Input placeholder="Search by reg or job…" value={q} onChange={e=>setQ(e.target.value)} />
+        <Link href="/vans/new">
+          <Button>New Van</Button>
+        </Link>
       </div>
       <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
         {filtered.map((v) => (
-          <Card key={v.id}>
+            <Card key={v.id}>
             <CardContent>
               <div className="p-3 space-y-2">
+                <div className="aspect-square rounded-xl overflow-hidden bg-neutral-100 border w-1/2 h-1/2">
+                  {v.photo_url ? (
+                    <img src={v.photo_url} alt={`${v.reg_number} photo`} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full grid place-items-center text-xs text-neutral-400">No image</div>
+                  )}
+                </div>
                 <div className="text-sm text-neutral-500">Van</div>
                 <div className="text-xl font-semibold">{v.reg_number}</div>
+                 <div className="text-sm">Make/Model: {(v.make || "—") + " " + (v.model || "")}</div>
+                <div className="text-sm">MOT: {v.mot_date ? new Date(v.mot_date).toLocaleDateString() : "—"}</div>
                 <div className="text-sm">Team: {v.teams?.name || "—"}</div>
                 <div className="text-sm">
                   Job: {v.manifest?.jobs?.name || "—"}

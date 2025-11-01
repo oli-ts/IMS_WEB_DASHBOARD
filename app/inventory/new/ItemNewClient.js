@@ -80,6 +80,9 @@ export default function ItemNewClient() {
   const [photoFile, setPhotoFile] = useState("");
   const [photoAltFile, setPhotoAltFile] = useState(null);
   const [printAfter, setPrintAfter] = useState(true);
+  // Accessories UI state
+  const [hasAccessories, setHasAccessories] = useState(false);
+  const [accRows, setAccRows] = useState([]); // {_id,name,qty,brand,notes,photoFile,preview}
 
   const [previewMain, setPreviewMain] = useState(null);
   const [previewAlt, setPreviewAlt] = useState(null);
@@ -159,6 +162,7 @@ export default function ItemNewClient() {
 
   const selectedClass = classification?.value || null;
   const uidPrefix = selectedClass ? PREFIX[selectedClass] : null;
+  const canHaveAccessories = ["light_tooling", "heavy_tooling", "vehicles"].includes(selectedClass || "");
 
   const canSubmit = useMemo(() => {
     return (
@@ -275,6 +279,78 @@ export default function ItemNewClient() {
 
       const { error } = await sb.from(table).insert(payload);
       if (error) throw error;
+
+      // Insert child accessories if applicable
+      if (canHaveAccessories && hasAccessories) {
+        const rows = (accRows || [])
+          .map((r) => ({ ...r, name: (r.name || "").trim(), qty: Number(r.qty || 0) || 0 }))
+          .filter((r) => r.name && r.qty > 0);
+        if (rows.length) {
+          const accPayloads = [];
+          for (const r of rows) {
+            const base = `ACC-${genRandom(4)}`;
+            const accUid = await ensureUid(base);
+            let accPhotoUrl = null;
+            if (r.photoFile) {
+              try {
+                const ext = r.photoFile.name.split(".").pop() || "jpg";
+                const path = `items/${accUid}/${Date.now()}.${ext}`;
+                const { error: upErr } = await sb.storage
+                  .from("item-photos")
+                  .upload(path, r.photoFile, { cacheControl: "3600", upsert: true });
+                if (!upErr) {
+                  const { data: pub } = sb.storage.from("item-photos").getPublicUrl(path);
+                  accPhotoUrl = pub?.publicUrl || null;
+                }
+              } catch (e) {
+                console.warn("Accessory photo upload failed", e);
+              }
+            }
+            accPayloads.push({
+              uid: accUid,
+              classification: "ACCESSORY",
+              nested_parent_uid: finalUid,
+              name: r.name,
+              brand: r.brand || null,
+              notes: r.notes || null,
+              unit: unit?.value || "pcs",
+              quantity_total: r.qty,
+              quantity_available: r.qty,
+              warehouse_id: warehouse?.value || null,
+              zone_id: zone?.value || null,
+              bay_id: bay?.value || null,
+              shelf_id: shelf?.value || null,
+              photo_url: accPhotoUrl,
+            });
+          }
+          let { error: accErr } = await sb.from("accessories").insert(accPayloads);
+          if (accErr) {
+            // Fallback: if accessories table lacks 'notes', retry mapping notes -> model
+            const msg = (accErr?.message || "").toLowerCase();
+            if (msg.includes("notes") || msg.includes("column") || msg.includes("cannot find")) {
+              const alt = accPayloads.map(({ notes, ...rest }) => ({ ...rest, model: notes || null }));
+              const { error: accErr2 } = await sb.from("accessories").insert(alt);
+              if (accErr2) console.warn("[new item] accessories insert failed (retry)", accErr2);
+              else accErr = null;
+            } else {
+              console.warn("[new item] accessories insert failed", accErr);
+            }
+          }
+          if (printAfter) {
+            for (const p of accPayloads) {
+              try {
+                await fetch("/api/print-label", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ uid: p.uid }),
+                });
+              } catch (e) {
+                console.warn("[new item] accessory print failed", p.uid, e);
+              }
+            }
+          }
+        }
+      }
 
       // Print label if toggled on
       if (printAfter) {
@@ -444,6 +520,73 @@ export default function ItemNewClient() {
                 Create Item
               </Button>
             </div>
+
+            {/* Accessories (optional) */}
+            {canHaveAccessories && (
+              <div className="md:col-span-2 space-y-3">
+                <div className="flex items-center gap-2">
+                  <input id="has-acc" type="checkbox" checked={hasAccessories} onChange={(e)=>setHasAccessories(e.target.checked)} />
+                  <label htmlFor="has-acc" className="text-sm">Has accessories</label>
+                </div>
+                {hasAccessories && (
+                  <div className="rounded-2xl border p-3 dark:border-neutral-800">
+                    <div className="text-sm text-neutral-600 mb-2">Accessories</div>
+                    <div className="grid grid-cols-12 gap-2 mb-1 text-xs text-neutral-500">
+                      <div className="col-span-4">Name</div>
+                      <div className="col-span-2">Qty</div>
+                      <div className="col-span-2">Brand</div>
+                      <div className="col-span-3">Notes (Voltage, Model, etc)</div>
+                      <div className="col-span-1 text-right">Actions</div>
+                    </div>
+                    <div className="space-y-2">
+                      {accRows.map((r) => (
+                        <div key={r._id} className="grid grid-cols-12 gap-2">
+                          <Input className="col-span-4 h-9" placeholder="Accessory name" value={r.name || ""} onChange={(e)=>setAccRows(prev=>prev.map(x=>x._id===r._id?{...x,name:e.target.value}:x))} />
+                          <Input type="number" min="0" className="col-span-2 h-9" placeholder="0" value={r.qty ?? ""} onChange={(e)=>setAccRows(prev=>prev.map(x=>x._id===r._id?{...x,qty:e.target.value}:x))} />
+                          <Input className="col-span-2 h-9" placeholder="Brand" value={r.brand || ""} onChange={(e)=>setAccRows(prev=>prev.map(x=>x._id===r._id?{...x,brand:e.target.value}:x))} />
+                          <Input className="col-span-3 h-9" placeholder="Notes (Voltage, Model, etc)" value={r.notes || ""} onChange={(e)=>setAccRows(prev=>prev.map(x=>x._id===r._id?{...x,notes:e.target.value}:x))} />
+                          <div className="col-span-1 flex items-center justify-end">
+                            <Button type="button" size="sm" variant="outline" onClick={()=>setAccRows(prev=>prev.filter(x=>x._id!==r._id))}>Remove</Button>
+                          </div>
+                          {/* photo row */}
+                          <div className="col-span-12 grid grid-cols-12 gap-2">
+                            <div className="col-span-10">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e)=>{
+                                  const f = e.target.files?.[0] || null;
+                                  setAccRows(prev=>prev.map(x=>{
+                                    if(x._id!==r._id) return x;
+                                    const next = { ...x, photoFile: f };
+                                    try { if (x.preview) URL.revokeObjectURL(x.preview); } catch{}
+                                    next.preview = f ? URL.createObjectURL(f) : null;
+                                    return next;
+                                  }))
+                                }}
+                                className="block w-full text-xs"
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-100 border">
+                                {r.preview ? (
+                                  <img src={r.preview} alt="preview" className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No img</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <Button type="button" size="sm" variant="outline" onClick={()=>setAccRows(prev=>[...prev,{ _id:`row-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name:"", qty:1, brand:"", notes:"", photoFile:null, preview:null }])}>Add Row</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Photo */}
             <div className="space-y-1 md:col-span-2 ">

@@ -72,10 +72,13 @@ export default function InventoryPage() {
     const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
     const brandVals = uniq((items || []).map((i) => (i.brand || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
     const classVals = uniq((items || []).map((i) => (i.classification || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
+    // Ensure Accessories shows even if no rows in first fetch
+    if (!classVals.includes("ACCESSORY")) classVals.push("ACCESSORY");
     const statusVals = uniq((items || []).map((i) => (i.status || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
 
     setBrands([{ value: "", label: "None" }, ...brandVals.map((v) => ({ value: v, label: v }))]);
-    setClassifications([{ value: "", label: "None" }, ...classVals.map((v) => ({ value: v, label: v }))]);
+    const labelMap = { ACCESSORY: "Accessories (ACC)" };
+    setClassifications([{ value: "", label: "None" }, ...classVals.map((v) => ({ value: v, label: labelMap[v] || v }))]);
     setStatuses([{ value: "", label: "None" }, ...statusVals.map((v) => ({ value: v, label: v }))]);
   }, [items]);
 

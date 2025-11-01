@@ -284,8 +284,8 @@ export default function VanDetailClient({ vanId }) {
 
 function Stat({ label, value }) {
   return (
-    <div className="bg-white rounded-xl border p-3">
-      <div className="text-sm text-neutral-500">{label}</div>
+    <div className="bg-white dark:bg-neutral-900 rounded-xl border dark:border-neutral-800 p-3">
+      <div className="text-sm text-neutral-500 dark:text-neutral-400">{label}</div>
       <div className="text-2xl font-bold">{value}</div>
     </div>
   );

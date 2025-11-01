@@ -41,7 +41,7 @@ export default function Templates() {
       </div>
       <div className="grid gap-2">
        {rows.map(r => (
-          <div key={r.id} className="p-3 rounded-xl border bg-white dark:bg-black">
+          <div key={r.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800">
             <div className="flex items-start justify-between">
               <div>
                 <div className="font-medium">{r.name}</div>

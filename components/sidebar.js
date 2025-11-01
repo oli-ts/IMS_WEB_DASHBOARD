@@ -71,7 +71,7 @@ export function Sidebar({ user, role }) {
         >
           <div className="flex items-center gap-3">
             {/* Avatar */}
-            <div className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center font-semibold">
+            <div className="h-10 w-10 rounded-full bg-white dark:bg-neutral-100 text-black flex items-center justify-center font-semibold">
               {initialsFromName(displayName)}
             </div>
             {/* Name + Role */}

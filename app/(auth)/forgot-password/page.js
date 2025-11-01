@@ -23,7 +23,7 @@ export default function ForgotPassword() {
 
   return (
     <div className="h-[80dvh] grid place-items-center">
-      <form onSubmit={onSubmit} className="bg-white p-6 rounded-2xl shadow w-full max-w-sm space-y-4">
+      <form onSubmit={onSubmit} className="bg-white dark:bg-neutral-900 border dark:border-neutral-800 p-6 rounded-2xl shadow w-full max-w-sm space-y-4">
         <h1 className="text-xl font-semibold">Forgot password</h1>
         {sent ? (
           <p className="text-sm text-neutral-600">

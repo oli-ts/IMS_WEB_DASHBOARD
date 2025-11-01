@@ -28,7 +28,7 @@ export default function SignIn(){
 
   return (
     <div className="h-[80dvh] grid place-items-center">
-      <form onSubmit={onSubmit} className="bg-white p-6 rounded-2xl shadow w-full max-w-sm space-y-4">
+      <form onSubmit={onSubmit} className="bg-white dark:bg-neutral-900 border dark:border-neutral-800 p-6 rounded-2xl shadow w-full max-w-sm space-y-4">
         <h1 className="text-xl font-semibold">Sign in</h1>
         <Input type="email" placeholder="you@company.com" value={email} onChange={e=>setEmail(e.target.value)} />
         <Input type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />

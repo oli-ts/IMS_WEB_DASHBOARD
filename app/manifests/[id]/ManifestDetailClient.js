@@ -10,6 +10,26 @@ export default function ManifestDetailClient({ manifestId }) {
   const [items, setItems] = useState([]);
   const [meta, setMeta] = useState(null);
 
+  async function addParentAndAccessoriesToManifest(sb, manifestId, parentUid, parentQty = 1) {
+    const n = Math.max(1, Number(parentQty) || 1);
+    await sb.from("manifest_items").insert({ manifest_id: manifestId, item_uid: parentUid, qty_required: n, status: "pending" });
+    const { data: accs } = await sb
+      .from("accessories")
+      .select("uid,quantity_total")
+      .eq("nested_parent_uid", parentUid);
+    if (accs?.length) {
+      const { data: existing } = await sb
+        .from("manifest_items")
+        .select("item_uid")
+        .eq("manifest_id", manifestId);
+      const existingSet = new Set((existing || []).map((r) => r.item_uid));
+      const lines = accs
+        .filter((a) => !existingSet.has(a.uid))
+        .map((a) => ({ manifest_id: manifestId, item_uid: a.uid, qty_required: Math.max(1, Number(a.quantity_total || 0)), status: "pending" }));
+      if (lines.length) await sb.from("manifest_items").insert(lines);
+    }
+  }
+
   async function loadItems() {
     const { data } = await sb
       .from("manifest_items")
@@ -97,7 +117,19 @@ export default function ManifestDetailClient({ manifestId }) {
 
   async function addItemToManifest(uid, qty = 1) {
     const n = Math.max(1, Number(qty) || 1);
-    await sb.from("manifest_items").insert({ manifest_id: manifestId, item_uid: uid, qty_required: n, status: "pending" });
+    // Determine if this is a parent class
+    const { data: info } = await sb
+      .from("inventory_union")
+      .select("uid,classification")
+      .eq("uid", uid)
+      .limit(1);
+    const cls = (info?.[0]?.classification || "").toUpperCase();
+    const isParent = ["LIGHT_TOOL", "HEAVY_TOOL", "VEHICLE"].includes(cls);
+    if (isParent) {
+      await addParentAndAccessoriesToManifest(sb, manifestId, uid, n);
+    } else {
+      await sb.from("manifest_items").insert({ manifest_id: manifestId, item_uid: uid, qty_required: n, status: "pending" });
+    }
     await loadItems();
   }
 

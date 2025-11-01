@@ -77,7 +77,7 @@ export default function CheckoutClient() {
         .select("item_uid, qty_required, qty_checked_out, qty_checked_in")
         .eq("manifest_id", manifest.value);
 
-      const list = totals || [];
+      let list = totals || [];
 
       // Enrich with inventory info
       const uids = [...new Set(list.map((r) => r.item_uid))];
@@ -85,11 +85,51 @@ export default function CheckoutClient() {
       if (uids.length) {
         const { data: inv } = await sb
           .from("inventory_union")
-          .select("uid,name,photo_url,classification")
+          .select("uid,name,photo_url,classification,nested_parent_uid")
           .in("uid", uids);
         infoMap = Object.fromEntries((inv || []).map((i) => [i.uid, i]));
       }
       setItemInfo(infoMap);
+
+      // Ensure accessories are present as manifest lines for any parent items
+      try {
+        const parentUids = Object.values(infoMap)
+          .filter((i) => ["LIGHT_TOOL", "HEAVY_TOOL", "VEHICLE"].includes((i.classification || "").toUpperCase()))
+          .map((i) => i.uid);
+        if (parentUids.length) {
+          const existingSet = new Set(list.map((r) => r.item_uid));
+          const { data: accs } = await sb
+            .from("accessories")
+            .select("uid,quantity_total,nested_parent_uid")
+            .in("nested_parent_uid", parentUids);
+          const lines = (accs || [])
+            .filter((a) => !existingSet.has(a.uid))
+            .map((a) => ({ manifest_id: manifest.value, item_uid: a.uid, qty_required: Math.max(1, Number(a.quantity_total || 0)), status: "pending" }));
+          if (lines.length) {
+            await sb.from("manifest_items").insert(lines);
+            // reload totals after insert
+            const { data: totals2 } = await sb
+              .from("manifest_item_totals")
+              .select("item_uid, qty_required, qty_checked_out, qty_checked_in")
+              .eq("manifest_id", manifest.value);
+            list = totals2 || list;
+            // ensure itemInfo includes newly added accessories
+            const uids2 = [...new Set((list || []).map((r) => r.item_uid))];
+            const missing = uids2.filter((u) => !infoMap[u]);
+            if (missing.length) {
+              const { data: inv2 } = await sb
+                .from("inventory_union")
+                .select("uid,name,photo_url,classification,nested_parent_uid")
+                .in("uid", missing);
+              const add = Object.fromEntries((inv2 || []).map((i) => [i.uid, i]));
+              setItemInfo((prev) => ({ ...prev, ...add }));
+              infoMap = { ...infoMap, ...add };
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[checkout] ensure accessories skipped", e?.message || e);
+      }
 
       // Initialize UI selection based on “remaining to checkout”
       setRows(
@@ -115,6 +155,38 @@ export default function CheckoutClient() {
       return hay.includes(q.toLowerCase());
     });
   }, [rows, itemInfo, q]);
+
+  // Group accessories under their parent items for visual clarity
+  const grouped = useMemo(() => {
+    const parents = [];
+    const byParent = new Map();
+    for (const r of filtered) {
+      const info = itemInfo[r.item_uid] || {};
+      const cls = (info.classification || "").toUpperCase();
+      if (cls === "ACCESSORY" && info.nested_parent_uid) {
+        const list = byParent.get(info.nested_parent_uid) || [];
+        list.push(r);
+        byParent.set(info.nested_parent_uid, list);
+      } else {
+        parents.push(r);
+      }
+    }
+    const ordered = [];
+    const pushed = new Set();
+    const push = (r) => { if (!pushed.has(r.item_uid)) { ordered.push(r); pushed.add(r.item_uid); } };
+    for (const p of parents) {
+      push(p);
+      const kids = byParent.get(p.item_uid) || [];
+      for (const k of kids) push(k);
+    }
+    // Orphan accessories where parent line isn’t present
+    for (const [pid, kids] of byParent.entries()) {
+      if (!pushed.has(pid)) {
+        for (const k of kids) push(k);
+      }
+    }
+    return ordered;
+  }, [filtered, itemInfo]);
 
   async function submit() {
     try {
@@ -248,14 +320,15 @@ export default function CheckoutClient() {
           )}
 
           <div className="mt-4 grid gap-2 max-h-[60vh] overflow-auto">
-            {filtered.map((r) => {
+            {grouped.map((r) => {
               const info = itemInfo[r.item_uid];
               const remaining = Math.max(0, Number(r.qty_required || 0) - Number(r.qty_checked_out || 0));
+              const isAcc = ((info?.classification || "").toUpperCase() === "ACCESSORY");
 
               return (
                 <div
                   key={r.item_uid}
-                  className={`p-3 rounded-xl border bg-white ${r.selected ? "ring-2 ring-black" : ""}`}
+                  className={`p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 ${r.selected ? "ring-2 ring-black dark:ring-white" : ""} ${isAcc ? "ml-6 border-l-2 pl-3 bg-neutral-50 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700" : ""}`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">

@@ -33,6 +33,8 @@ export default function ItemDetailClient({ uid }) {
   const [previewSize, setPreviewSize] = useState("4x6");
   const [previewDpmm, setPreviewDpmm] = useState("8dpmm");
   const [previewZoom, setPreviewZoom] = useState(2);
+  // accessories for parent items
+  const [accessories, setAccessories] = useState([]);
 
   // edit modal state
   const [editOpen, setEditOpen] = useState(false);
@@ -144,6 +146,18 @@ export default function ItemDetailClient({ uid }) {
       const itm = items?.[0] || null;
       setItem(itm);
 
+      // Load accessories for this item if any
+      if (itm?.uid) {
+        const { data: acc } = await sb
+          .from("accessories")
+          .select("uid,name,brand,model,quantity_total,quantity_available,unit,photo_url")
+          .eq("nested_parent_uid", itm.uid)
+          .order("name");
+        setAccessories(acc || []);
+      } else {
+        setAccessories([]);
+      }
+
       // 2) Derived live status + assignments
       const { data: ls } = await sb
         .from("item_live_status")
@@ -214,6 +228,11 @@ export default function ItemDetailClient({ uid }) {
           <div className="text-sm text-neutral-500">Item</div>
           <h1 className="text-2xl font-semibold">{item?.name || uid}</h1>
           <div className="text-sm text-neutral-600">UID: {uid}</div>
+          {item?.source_table === "accessories" && item?.nested_parent_uid && (
+            <div className="text-sm text-neutral-600 mt-1">
+              Parent tool: <Link className="underline" href={`/inventory/${encodeURIComponent(item.nested_parent_uid)}`}>{item.nested_parent_uid}</Link>
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <Link href="/inventory">
@@ -433,6 +452,39 @@ export default function ItemDetailClient({ uid }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Accessories list for parent tools */}
+      {accessories.length > 0 && (
+        <Card>
+          <CardHeader>Accessories</CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {accessories.map((a) => (
+                <div key={a.uid} className="p-3 rounded-2xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 grid grid-cols-2 gap-3">
+                  <div className="aspect-square rounded-xl overflow-hidden bg-neutral-100 border">
+                    {a.photo_url ? (
+                      <img src={a.photo_url} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="h-full w-full grid place-items-center text-xs text-neutral-400">No image</div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-sm text-neutral-500">ACCESSORY</div>
+                    <div className="font-semibold">{a.name}</div>
+                    <div className="text-sm text-neutral-600">{[a.brand, a.model].filter(Boolean).join(" ")}</div>
+                    <div className="text-sm mt-1">Qty: {typeof a.quantity_available === "number" ? a.quantity_available : a.quantity_total} / {a.quantity_total} {a.unit || "pcs"}</div>
+                    <div className="mt-2">
+                      <Link href={`/inventory/${encodeURIComponent(a.uid)}`}>
+                        <Button size="sm" variant="outline">View</Button>
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Label preview modal */}
       {previewOpen && (

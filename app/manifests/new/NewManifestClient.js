@@ -117,6 +117,36 @@ export default function NewManifestClient({ initial }) {
     if (items.length) {
       const { error: miErr } = await sb.from("manifest_items").insert(items);
       if (miErr) throw miErr;
+      // After base lines inserted, include accessories for any parent items
+      try {
+        const parentUids = Array.from(new Set(items.map((r) => r.item_uid)));
+        if (parentUids.length) {
+          const { data: info } = await sb
+            .from("inventory_union")
+            .select("uid,classification")
+            .in("uid", parentUids);
+          const parents = (info || [])
+            .filter((r) => ["LIGHT_TOOL", "HEAVY_TOOL", "VEHICLE"].includes((r.classification || "").toUpperCase()))
+            .map((r) => r.uid);
+          if (parents.length) {
+            const { data: existing } = await sb
+              .from("manifest_items")
+              .select("item_uid")
+              .eq("manifest_id", manifestId);
+            const existingSet = new Set((existing || []).map((r) => r.item_uid));
+            const { data: accs } = await sb
+              .from("accessories")
+              .select("uid,quantity_total,nested_parent_uid")
+              .in("nested_parent_uid", parents);
+            const lines = (accs || [])
+              .filter((a) => !existingSet.has(a.uid))
+              .map((a) => ({ manifest_id: manifestId, item_uid: a.uid, qty_required: Math.max(1, Number(a.quantity_total || 0)), status: "pending" }));
+            if (lines.length) await sb.from("manifest_items").insert(lines);
+          }
+        }
+      } catch (e) {
+        console.warn("[new manifest] accessories add skipped", e?.message || e);
+      }
     }
 
     return manifestId;
@@ -191,12 +221,12 @@ export default function NewManifestClient({ initial }) {
             </div>
 
             {/* Summary */}
-            <div className="md:col-span-2 p-3 rounded-xl border bg-white">
+            <div className="md:col-span-2 p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800">
               <div className="font-semibold mb-2">Summary</div>
               <ul className="text-sm">
                 {summary.map(r => (
                   <li key={r.k} className="flex gap-2">
-                    <div className="w-28 text-neutral-500">{r.k}</div>
+                    <div className="w-28 text-neutral-500 dark:text-neutral-400">{r.k}</div>
                     <div className="flex-1">{r.v}</div>
                   </li>
                 ))}

@@ -1,15 +1,11 @@
-import { Suspense } from "react";
+// app/manifests/new/page.js
 import NewManifestClient from "./NewManifestClient";
 
-export default function Page({ searchParams }) {
+export default async function Page({ searchParams }) {
+  const sp = await searchParams;
   const initial = {
-    templateId: searchParams?.templateId ?? null,
-    jobId: searchParams?.jobId ?? null,
+    templateId: sp?.template ?? null,
+    jobId: sp?.job ?? null,
   };
-
-  return (
-    <Suspense fallback={null}>
-      <NewManifestClient initial={initial} />
-    </Suspense>
-  );
+  return <NewManifestClient initial={initial} />;
 }

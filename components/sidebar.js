@@ -12,6 +12,8 @@ const links = [
   { href: "/templates", label: "Templates" },
   { href: "/reporting", label: "Reporting" },
   { href: "/settings", label: "Settings" },
+  { href: '/checkout', label: 'Check-Out' },
+  { href: '/checkin', label: 'Check-In' },
 ];
 
 const sb = supabaseBrowser();

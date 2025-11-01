@@ -21,6 +21,12 @@ const CLASS_OPTIONS = [
   { value: "vehicles", label: "Vehicles (VEH)" },
 ];
 
+const UNIT_OPTIONS = [
+  { value: "pcs", label: "pcs" },
+  { value: "kg", label: "kg" },
+  { value: "ltrs", label: "ltrs" },
+];
+
 const CLASS_DB_CONST = {
   light_tooling: "LIGHT_TOOL",
   heavy_tooling: "HEAVY_TOOL",
@@ -68,7 +74,7 @@ export default function ItemNewClient() {
   const [brand, setBrand] = useState("");
   const [model, setModel] = useState("");
   const [serial, setSerial] = useState("");
-  const [unit, setUnit] = useState("pcs");
+  const [unit, setUnit] = useState({ value: "pcs", label: "pcs" });
   const [qty, setQty] = useState(1);
   const [notes, setNotes] = useState("");
   const [photoFile, setPhotoFile] = useState("");
@@ -247,7 +253,7 @@ export default function ItemNewClient() {
         model: model || null,
         serial_number: serial || null,
         classification: CLASS_DB_CONST[selectedClass],
-        unit: unit || "pcs",
+        unit: unit?.value || "pcs",
         notes: notes || null,
         qr_payload: `CPG1|${finalUid}|${
           warehouse?.label?.split(" — ")[0] || ""
@@ -372,10 +378,10 @@ export default function ItemNewClient() {
             </div>
             <div className="space-y-1">
               <div className="text-sm text-neutral-500">Unit*</div>
-              <Input
-                placeholder="pcs / set / roll / box"
-                value={unit}
-                onChange={(e) => setUnit(e.target.value)}
+              <Select
+                items={UNIT_OPTIONS}
+                triggerLabel={unit?.label || "Select unit"}
+                onSelect={setUnit}
               />
             </div>
 

@@ -6,6 +6,9 @@ import { Card, CardContent } from "../../components/ui/card";
 import { Select } from "../../components/ui/select";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { useLiveStatuses } from "@/lib/hooks/useLiveStatuses";
+import { LiveStatusBadge } from "@/components/live-status-badge";
+import { QtyBadge } from "@/components/qty-badge";
 
 export default function InventoryPage() {
   const sb = supabaseBrowser();
@@ -96,6 +99,10 @@ export default function InventoryPage() {
       }),
     [items, q, brand, classification, status]
   );
+
+  // Live statuses for filtered items
+  const uids = useMemo(() => filtered.map((i) => i.uid), [filtered]);
+  const { liveMap } = useLiveStatuses(uids);
 
   return (
     <div className="space-y-4">
@@ -199,7 +206,34 @@ export default function InventoryPage() {
                     return parts.length ? parts.join(" · ") : (i.location_last_seen || "-");
                   })()}
                 </div>
-                <div className="text-sm">Status: {i.status}</div>
+                {(() => {
+                  const cls = i.classification;
+                  const allowed = ["sundries","ppe","consumables_material","consumable_equipment"]; 
+                  const job = Number(liveMap[i.uid]?.total_on_jobs || 0);
+                  const total = typeof i.quantity_total === "number" ? i.quantity_total : null;
+                  const available = typeof total === "number" ? Math.max(total - job, 0) : null;
+                  if (allowed.includes(cls)) {
+                    return (
+                      <div className="text-sm">
+                        Qty available: <QtyBadge label="Available" value={available} unit={i.unit} tone="green" />
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="text-sm">Status: <LiveStatusBadge status={liveMap[i.uid]?.status || i.status} /></div>
+                  );
+                })()}
+                {(() => {
+                  const job = Number(liveMap[i.uid]?.total_on_jobs || 0);
+                  const total = typeof i.quantity_total === "number" ? i.quantity_total : null;
+                  const inWh = typeof total === "number" ? Math.max(total - job, 0) : null;
+                  return (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      <QtyBadge label="On job" value={job} unit={i.unit} tone="amber" />
+                      <QtyBadge label="In warehouse" value={inWh} unit={i.unit} tone="green" />
+                    </div>
+                  );
+                })()}
                 <div className="mt-2">
                   <Link href={`/inventory/${encodeURIComponent(i.uid)}`}>
                     <Button size="sm" variant="outline">
@@ -244,7 +278,34 @@ export default function InventoryPage() {
                       <td className="py-2 pr-3">{i.brand}</td>
                       <td className="py-2 pr-3">{i.quantity_total}</td>
                       <td className="py-2 pr-3">{(() => { const parts = []; const z = zoneMap[i.zone_id]; const b = bayMap[i.bay_id]; const s = shelfMap[i.shelf_id]; if (z) parts.push(`Zone: ${z}`); if (b) parts.push(`Bay: ${b}`); if (s) parts.push(`Shelf: ${s}`); return parts.length ? parts.join(" · ") : (i.location_last_seen || "-"); })()}</td>
-                      <td className="py-2 pr-3">{i.status}</td>
+                      <td className="py-2 pr-3">
+                        {(() => {
+                          const cls = i.classification;
+                          const allowed = ["sundries","ppe","consumables_material","consumable_equipment"]; 
+                          const job = Number(liveMap[i.uid]?.total_on_jobs || 0);
+                          const total = typeof i.quantity_total === "number" ? i.quantity_total : null;
+                          const available = typeof total === "number" ? Math.max(total - job, 0) : null;
+                          const top = allowed.includes(cls)
+                            ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  <QtyBadge label="Available" value={available} unit={i.unit} tone="green" />
+                                </div>
+                              )
+                            : (
+                                <LiveStatusBadge status={liveMap[i.uid]?.status || i.status} />
+                              );
+                          const inWh = typeof total === "number" ? Math.max(total - job, 0) : null;
+                          return (
+                            <div className="flex flex-col gap-1">
+                              {top}
+                              <div className="flex flex-wrap gap-1.5">
+                                <QtyBadge label="On job" value={job} unit={i.unit} tone="amber" />
+                                <QtyBadge label="In warehouse" value={inWh} unit={i.unit} tone="green" />
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </td>
                       <td className="py-2 pr-3">
                         <Link href={`/inventory/${encodeURIComponent(i.uid)}`}>
                           <Button size="sm" variant="outline">View</Button>

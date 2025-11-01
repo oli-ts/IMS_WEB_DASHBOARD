@@ -8,6 +8,7 @@ import { Button } from "../../../components/ui/button";
 export default function ManifestDetailClient({ manifestId }) {
   const sb = supabaseBrowser();
   const [items, setItems] = useState([]);
+  const [meta, setMeta] = useState(null);
 
   async function loadItems() {
     const { data } = await sb
@@ -58,6 +59,15 @@ export default function ManifestDetailClient({ manifestId }) {
   }
 
   useEffect(() => {
+    (async () => {
+      // Load manifest header for title
+      const { data: mh } = await sb
+        .from("active_manifests")
+        .select("id, jobs(name)")
+        .eq("id", manifestId)
+        .single();
+      setMeta(mh || null);
+    })();
     loadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifestId]);
@@ -118,7 +128,7 @@ export default function ManifestDetailClient({ manifestId }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-xl font-semibold">Manifest</div>
+      <div className="text-xl font-semibold">Manifest for: {meta?.jobs?.name || "-"}</div>
       <div className="flex gap-3">
         <Stat label="Required" value={totals.req} />
         <Stat label="Checked Out" value={totals.out} />
@@ -208,4 +218,3 @@ function QtyEditor({ value, onChange }) {
     </div>
   );
 }
-

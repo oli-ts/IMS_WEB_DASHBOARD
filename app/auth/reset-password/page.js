@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "../../../lib/supabase-browser";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 
-export default function ResetPassword(){
+function ResetPasswordInner() {
   const sb = supabaseBrowser();
   const router = useRouter();
   const sp = useSearchParams();
@@ -24,7 +24,7 @@ export default function ResetPassword(){
     })();
   }, [sb, sp]);
 
-  async function onSubmit(e){
+  async function onSubmit(e) {
     e.preventDefault();
     if (password.length < 8) return alert("Password must be at least 8 characters.");
     if (password !== confirm) return alert("Passwords do not match.");
@@ -41,11 +41,11 @@ export default function ResetPassword(){
       <form onSubmit={onSubmit} className="bg-white dark:bg-neutral-900 border dark:border-neutral-800 p-6 rounded-2xl shadow w-full max-w-sm space-y-4">
         <h1 className="text-xl font-semibold">Reset password</h1>
         {!canReset ? (
-          <p className="text-sm text-neutral-600">The reset link is invalid or expired. Request a new one from the “Forgot password” page.</p>
+          <p className="text-sm text-neutral-600">The reset link is invalid or expired. Request a new one from the Forgot password page.</p>
         ) : (
           <>
-            <Input type="password" placeholder="New password" value={password} onChange={e=>setPassword(e.target.value)} />
-            <Input type="password" placeholder="Confirm password" value={confirm} onChange={e=>setConfirm(e.target.value)} />
+            <Input type="password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Input type="password" placeholder="Confirm password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
             <Button type="submit" className="w-full" disabled={loading}>{loading ? "Updating…" : "Update password"}</Button>
           </>
         )}
@@ -53,3 +53,12 @@ export default function ResetPassword(){
     </div>
   );
 }
+
+export default function ResetPassword() {
+  return (
+    <Suspense fallback={null}>
+      <ResetPasswordInner />
+    </Suspense>
+  );
+}
+

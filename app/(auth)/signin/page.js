@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "../../../lib/supabase-browser";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import Link from "next/link";
 
-export default function SignIn(){
+function SignInInner() {
   const sb = supabaseBrowser();
   const router = useRouter();
   const sp = useSearchParams();
@@ -17,7 +17,7 @@ export default function SignIn(){
 
   const redirectTo = sp.get("redirectTo") || "/";
 
-  async function onSubmit(e){
+  async function onSubmit(e) {
     e.preventDefault();
     setLoading(true);
     const { error } = await sb.auth.signInWithPassword({ email, password });
@@ -30,8 +30,8 @@ export default function SignIn(){
     <div className="h-[80dvh] grid place-items-center">
       <form onSubmit={onSubmit} className="bg-white dark:bg-neutral-900 border dark:border-neutral-800 p-6 rounded-2xl shadow w-full max-w-sm space-y-4">
         <h1 className="text-xl font-semibold">Sign in</h1>
-        <Input type="email" placeholder="you@company.com" value={email} onChange={e=>setEmail(e.target.value)} />
-        <Input type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
+        <Input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <Input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
         <Button type="submit" className="w-full" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</Button>
         <div className="flex items-center justify-between text-sm">
           <Link href="/forgot-password" className="underline">Forgot password?</Link>
@@ -41,3 +41,12 @@ export default function SignIn(){
     </div>
   );
 }
+
+export default function SignIn() {
+  return (
+    <Suspense fallback={null}>
+      <SignInInner />
+    </Suspense>
+  );
+}
+

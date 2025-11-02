@@ -46,22 +46,70 @@ export default function Settings() {
   const [editingShelfId, setEditingShelfId] = useState(null);
   const [editShelfLabel, setEditShelfLabel] = useState("");
 
+  // Pagination state
+  const [whPage, setWhPage] = useState(1);
+  const whPageSize = 10;
+  const [whTotal, setWhTotal] = useState(0);
+
+  const [zPage, setZPage] = useState(1);
+  const zPageSize = 10;
+  const [zTotal, setZTotal] = useState(0);
+
+  const [bPage, setBPage] = useState(1);
+  const bPageSize = 10;
+  const [bTotal, setBTotal] = useState(0);
+
+  const [sPage, setSPage] = useState(1);
+  const sPageSize = 10;
+  const [sTotal, setSTotal] = useState(0);
+
   // Loaders
   async function loadWarehouses() {
-    const { data } = await sb.from("warehouse").select("id, wh_number, name").order("wh_number");
+    const from = (whPage - 1) * whPageSize;
+    const to = from + whPageSize - 1;
+    const { data, count } = await sb
+      .from("warehouse")
+      .select("id, wh_number, name", { count: "exact" })
+      .order("wh_number")
+      .range(from, to);
     setWarehouses(data || []);
+    setWhTotal(count || 0);
   }
   async function loadZones(warehouseId) {
-    const { data } = await sb.from("zones").select("id,name").eq("warehouse_id", warehouseId).order("name");
+    const from = (zPage - 1) * zPageSize;
+    const to = from + zPageSize - 1;
+    const { data, count } = await sb
+      .from("zones")
+      .select("id,name", { count: "exact" })
+      .eq("warehouse_id", warehouseId)
+      .order("name")
+      .range(from, to);
     setZones(data || []);
+    setZTotal(count || 0);
   }
   async function loadBays(zoneId) {
-    const { data } = await sb.from("bays").select("id,label").eq("zone_id", zoneId).order("label");
+    const from = (bPage - 1) * bPageSize;
+    const to = from + bPageSize - 1;
+    const { data, count } = await sb
+      .from("bays")
+      .select("id,label", { count: "exact" })
+      .eq("zone_id", zoneId)
+      .order("label")
+      .range(from, to);
     setBays(data || []);
+    setBTotal(count || 0);
   }
   async function loadShelfs(bayId) {
-    const { data } = await sb.from("shelfs").select("id,label").eq("bay_id", bayId).order("label");
+    const from = (sPage - 1) * sPageSize;
+    const to = from + sPageSize - 1;
+    const { data, count } = await sb
+      .from("shelfs")
+      .select("id,label", { count: "exact" })
+      .eq("bay_id", bayId)
+      .order("label")
+      .range(from, to);
     setShelfs(data || []);
+    setSTotal(count || 0);
   }
 
   useEffect(() => {
@@ -80,6 +128,9 @@ export default function Settings() {
     setBays([]);
     setSelectedBay(null);
     setShelfs([]);
+    setZPage(1);
+    setBPage(1);
+    setSPage(1);
   }, [selectedWarehouse]);
 
   useEffect(() => {
@@ -90,6 +141,8 @@ export default function Settings() {
     }
     setSelectedBay(null);
     setShelfs([]);
+    setBPage(1);
+    setSPage(1);
   }, [selectedZone]);
 
   useEffect(() => {
@@ -98,7 +151,14 @@ export default function Settings() {
     } else {
       setShelfs([]);
     }
+    setSPage(1);
   }, [selectedBay]);
+
+  // Reload on page changes
+  useEffect(() => { loadWarehouses(); }, [whPage]);
+  useEffect(() => { if (selectedWarehouse?.id) loadZones(selectedWarehouse.id); }, [zPage]);
+  useEffect(() => { if (selectedZone?.id) loadBays(selectedZone.id); }, [bPage]);
+  useEffect(() => { if (selectedBay?.id) loadShelfs(selectedBay.id); }, [sPage]);
 
   return (
     <div className="space-y-6">
@@ -156,12 +216,26 @@ export default function Settings() {
                           <div className="font-medium truncate">{w.wh_number} · {w.name}</div>
                           <Button size="sm" variant="outline" onClick={()=>{ setSelectedWarehouse(w); }}>Select</Button>
                           <Button size="sm" variant="outline" onClick={()=>{ setEditingWarehouseId(w.id); setEditWhNumber(w.wh_number||""); setEditWhName(w.name||""); }}>Edit</Button>
-                          <Button size="sm" variant="destructive" onClick={async ()=>{ if (!confirm('Delete this warehouse and its contents?')) return; await sb.from("warehouse").delete().eq("id", w.id); if (selectedWarehouse?.id===w.id) setSelectedWarehouse(null); loadWarehouses(); }}>Delete</Button>
+                          <Button size="sm" variant="destructive" onClick={async ()=>{
+                            const { count: zoneCount } = await sb.from("zones").select("id", { count: "exact" }).eq("warehouse_id", w.id);
+                            if ((zoneCount||0) > 0) { alert('Cannot delete warehouse with existing zones. Delete zones first.'); return; }
+                            if (!confirm('Delete this warehouse?')) return;
+                            await sb.from("warehouse").delete().eq("id", w.id);
+                            if (selectedWarehouse?.id===w.id) setSelectedWarehouse(null);
+                            loadWarehouses();
+                          }}>Delete</Button>
                         </div>
                       )}
                     </div>
                   </div>
                 ))}
+                <div className="flex items-center justify-between pt-2">
+                  <div className="text-xs text-neutral-500">Page {whPage} of {Math.max(1, Math.ceil((whTotal||0)/whPageSize))}</div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={()=>setWhPage(p=>Math.max(1,p-1))} disabled={whPage<=1}>Previous</Button>
+                    <Button size="sm" variant="outline" onClick={()=>setWhPage(p=>p+1)} disabled={whPage>=Math.max(1, Math.ceil((whTotal||0)/whPageSize))}>Next</Button>
+                  </div>
+                </div>
               </div>
             </div>
           </CardContent>
@@ -190,11 +264,25 @@ export default function Settings() {
                           <div className="font-medium truncate">{z.name}</div>
                           <Button size="sm" variant="outline" onClick={()=>setSelectedZone(z)}>Select</Button>
                           <Button size="sm" variant="outline" onClick={()=>{ setEditingZoneId(z.id); setEditZoneName(z.name||""); }}>Edit</Button>
-                          <Button size="sm" variant="destructive" onClick={async ()=>{ if (!confirm('Delete this zone and its contents?')) return; await sb.from("zones").delete().eq("id", z.id); if (selectedZone?.id===z.id) setSelectedZone(null); loadZones(selectedWarehouse.id); }}>Delete</Button>
+                          <Button size="sm" variant="destructive" onClick={async ()=>{
+                            const { count: bayCount } = await sb.from("bays").select("id", { count: "exact" }).eq("zone_id", z.id);
+                            if ((bayCount||0) > 0) { alert('Cannot delete zone with existing bays. Delete bays first.'); return; }
+                            if (!confirm('Delete this zone?')) return;
+                            await sb.from("zones").delete().eq("id", z.id);
+                            if (selectedZone?.id===z.id) setSelectedZone(null);
+                            loadZones(selectedWarehouse.id);
+                          }}>Delete</Button>
                         </div>
                       )}
                     </div>
                   ))}
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="text-xs text-neutral-500">Page {zPage} of {Math.max(1, Math.ceil((zTotal||0)/zPageSize))}</div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={()=>setZPage(p=>Math.max(1,p-1))} disabled={zPage<=1}>Previous</Button>
+                      <Button size="sm" variant="outline" onClick={()=>setZPage(p=>p+1)} disabled={zPage>=Math.max(1, Math.ceil((zTotal||0)/zPageSize))}>Next</Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -224,11 +312,25 @@ export default function Settings() {
                           <div className="font-medium truncate">{b.label}</div>
                           <Button size="sm" variant="outline" onClick={()=>setSelectedBay(b)}>Select</Button>
                           <Button size="sm" variant="outline" onClick={()=>{ setEditingBayId(b.id); setEditBayLabel(b.label||""); }}>Edit</Button>
-                          <Button size="sm" variant="destructive" onClick={async ()=>{ if (!confirm('Delete this bay and its contents?')) return; await sb.from("bays").delete().eq("id", b.id); if (selectedBay?.id===b.id) setSelectedBay(null); loadBays(selectedZone.id); }}>Delete</Button>
+                          <Button size="sm" variant="destructive" onClick={async ()=>{
+                            const { count: shelfCount } = await sb.from("shelfs").select("id", { count: "exact" }).eq("bay_id", b.id);
+                            if ((shelfCount||0) > 0) { alert('Cannot delete bay with existing shelfs. Delete shelfs first.'); return; }
+                            if (!confirm('Delete this bay?')) return;
+                            await sb.from("bays").delete().eq("id", b.id);
+                            if (selectedBay?.id===b.id) setSelectedBay(null);
+                            loadBays(selectedZone.id);
+                          }}>Delete</Button>
                         </div>
                       )}
                     </div>
                   ))}
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="text-xs text-neutral-500">Page {bPage} of {Math.max(1, Math.ceil((bTotal||0)/bPageSize))}</div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={()=>setBPage(p=>Math.max(1,p-1))} disabled={bPage<=1}>Previous</Button>
+                      <Button size="sm" variant="outline" onClick={()=>setBPage(p=>p+1)} disabled={bPage>=Math.max(1, Math.ceil((bTotal||0)/bPageSize))}>Next</Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -262,6 +364,13 @@ export default function Settings() {
                       )}
                     </div>
                   ))}
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="text-xs text-neutral-500">Page {sPage} of {Math.max(1, Math.ceil((sTotal||0)/sPageSize))}</div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={()=>setSPage(p=>Math.max(1,p-1))} disabled={sPage<=1}>Previous</Button>
+                      <Button size="sm" variant="outline" onClick={()=>setSPage(p=>p+1)} disabled={sPage>=Math.max(1, Math.ceil((sTotal||0)/sPageSize))}>Next</Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -271,4 +380,3 @@ export default function Settings() {
     </div>
   );
 }
-

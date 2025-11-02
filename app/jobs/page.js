@@ -15,25 +15,32 @@ export default function JobsPage() {
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const [total, setTotal] = useState(0);
 
   async function loadJobs() {
     setLoading(true);
-    const { data, error } = await sb
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    const { data, error, count } = await sb
       .from("jobs")
-      .select("id,name,created_at")
-      .order("created_at", { ascending: false });
+      .select("id,name,created_at", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(from, to);
     if (error) {
       console.error(error);
       toast.error("Failed to load jobs");
     }
     setJobs(data || []);
+    setTotal(count || 0);
     setLoading(false);
   }
 
   useEffect(() => {
     loadJobs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [page]);
 
   async function createJob() {
     const name = (newName || "").trim();
@@ -86,6 +93,15 @@ export default function JobsPage() {
   }
 
   async function deleteJob(id) {
+    // Guard: prevent deletion if manifests reference this job
+    const { count } = await sb
+      .from("active_manifests")
+      .select("id", { count: "exact" })
+      .eq("job_id", id);
+    if ((count || 0) > 0) {
+      alert("Cannot delete job: one or more manifests reference it.");
+      return;
+    }
     if (!confirm("Delete this job? This cannot be undone.")) return;
     const { error } = await sb.from("jobs").delete().eq("id", id);
     if (error) {
@@ -94,7 +110,11 @@ export default function JobsPage() {
       return;
     }
     toast.success("Job deleted");
-    setJobs((prev) => prev.filter((j) => j.id !== id));
+    // Reload current page, and go back a page if now empty
+    const newTotal = Math.max(0, (total || 1) - 1);
+    const maxPage = Math.max(1, Math.ceil(newTotal / pageSize));
+    setPage((p) => Math.min(p, maxPage));
+    loadJobs();
   }
 
   return (
@@ -176,6 +196,13 @@ export default function JobsPage() {
                   </div>
                 </div>
               ))}
+              <div className="flex items-center justify-between pt-2">
+                <div className="text-xs text-neutral-500">Page {page} of {Math.max(1, Math.ceil((total||0)/pageSize))}</div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page<=1}>Previous</Button>
+                  <Button size="sm" variant="outline" onClick={()=>setPage(p=>p+1)} disabled={page>=Math.max(1, Math.ceil((total||0)/pageSize))}>Next</Button>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

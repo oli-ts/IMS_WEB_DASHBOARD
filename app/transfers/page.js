@@ -166,6 +166,7 @@ export default function Transfers() {
       const { data } = await sb
         .from("active_manifests")
         .select("id,jobs(name),vans(reg_number)")
+        .in("status", ["pending", "active"]) // only show pending/active manifests
         .order("id", { ascending: false });
       const opts = (data || []).map((m) => ({
         value: m.id,

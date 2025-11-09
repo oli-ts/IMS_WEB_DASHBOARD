@@ -1,61 +1,70 @@
 // app/api/print-label/route.js
-import { NextResponse } from "next/server";
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-// IMPORTANT: server-side only (not exposed to client)
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL; // fine to reuse
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // DO NOT expose on client!
+import { NextResponse } from 'next/server';
+
+function buildZpl(uid, name = '') {
+  // simple, safe fallback ZPL
+  return `^XA
+^PW480
+^LH10,10
+^CF0,30
+^FO10,10^FD${(name || '').slice(0,28)}^FS
+^CF0,28
+^FO10,50^FDUID: ${uid}^FS
+^FO10,90^BQN,2,6^FDQA,CPG1|${uid}^FS
+^XZ`;
+}
+
+async function supabaseService() {
+  const { createClient } = await import('@supabase/supabase-js');
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY; // REQUIRED
+  if (!url || !key) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+  }
+  return createClient(url, key, { auth: { persistSession: false } });
+}
 
 export async function POST(req) {
   try {
-    const { uid, zpl, dpmm = "12dpmm", size = "2x1.25" } = await req.json();
+    const { uid, zpl } = await req.json();
+    if (!uid) return NextResponse.json({ error: 'uid required' }, { status: 400 });
 
-    if (!uid && !zpl) {
-      return NextResponse.json({ error: "Provide uid or zpl" }, { status: 400 });
-    }
+    const sb = await supabaseService();
 
-    // Build ZPL if needed (uses your existing helper)
-    let finalZpl = zpl;
-    if (!finalZpl && uid) {
-      // Lazy import to keep route cold-start small
-      const { buildZplForItem } = await import("../../../lib/zpl.js");
-      // Pull item from inventory to feed the template
-      const { createClient } = await import("@supabase/supabase-js");
-      const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-
-      const { data: itemRows, error: itemErr } = await admin
-        .from("inventory_union")
-        .select("*")
-        .eq("uid", uid)
+    // Build ZPL: if none provided, try to fetch name with service role (bypasses RLS)
+    let zplToPrint = (zpl || '').trim();
+    if (!zplToPrint) {
+      const { data, error } = await sb
+        .from('inventory_union')
+        .select('uid,name')
+        .eq('uid', uid)
         .limit(1);
-
-      if (itemErr) throw itemErr;
-      const item = itemRows?.[0];
-      if (!item) return NextResponse.json({ error: "Item not found for uid" }, { status: 404 });
-
-      finalZpl = buildZplForItem({ ...item, uid });
-      if (!finalZpl) return NextResponse.json({ error: "Failed to build ZPL" }, { status: 500 });
+      // even if it errors / returns empty, we still print a generic label
+      if (error) {
+        console.error('[print-label] inventory_union select failed:', error.message);
+      }
+      const name = data?.[0]?.name || '';
+      zplToPrint = buildZpl(uid, name);
     }
 
-    // Invoke the Edge Function that actually prints
-    const resp = await fetch(`${SUPABASE_URL}/functions/v1/print_label`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        // Auth with service role so the function can trust this call (and avoid anon limits)
-        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-      },
-      body: JSON.stringify({ uid, zpl: finalZpl, dpmm, size }),
+    // Queue the job (service role bypasses RLS)
+    const { error: insErr } = await sb.from('label_print_jobs').insert({
+      uid,
+      zpl: zplToPrint,
+      status: 'queued',
+      source: 'web-dashboard',
     });
-
-    if (!resp.ok) {
-      const j = await resp.json().catch(() => ({}));
-      return NextResponse.json({ error: j.error || "Printer function failed" }, { status: 502 });
+    if (insErr) {
+      console.error('[print-label] insert failed:', insErr.message);
+      return NextResponse.json({ error: insErr.message }, { status: 500 });
     }
 
-    const j = await resp.json().catch(() => ({}));
-    return NextResponse.json({ ok: true, job: j.job || null });
+    return NextResponse.json({ ok: true, via: 'queue' }, { status: 200 });
   } catch (e) {
-    console.error(e);
-    return NextResponse.json({ error: e.message || "Print failed" }, { status: 500 });
+    console.error('[print-label] fatal:', e?.message || e);
+    return NextResponse.json({ error: e?.message || 'failed' }, { status: 500 });
   }
 }

@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Select } from "../../../components/ui/select";
+import { CONDITION_OPTIONS, CONDITION_DB_CONST } from "../../../lib/conditions";
 
 const CLASS_OPTIONS = [
   { value: "light_tooling", label: "Light Tooling (LT)" },
@@ -76,6 +77,7 @@ export default function ItemNewClient() {
   const [serial, setSerial] = useState("");
   const [unit, setUnit] = useState({ value: "pcs", label: "pcs" });
   const [qty, setQty] = useState(1);
+  const [condition, setCondition] = useState(CONDITION_OPTIONS[0]);
   const [notes, setNotes] = useState("");
   const [photoFile, setPhotoFile] = useState("");
   const [photoAltFile, setPhotoAltFile] = useState(null);
@@ -257,6 +259,7 @@ export default function ItemNewClient() {
         model: model || null,
         serial_number: serial || null,
         classification: CLASS_DB_CONST[selectedClass],
+        condition: condition ? CONDITION_DB_CONST[condition.value] : null,
         unit: unit?.value || "pcs",
         notes: notes || null,
         qr_payload: `CPG1|${finalUid}|${
@@ -439,6 +442,16 @@ export default function ItemNewClient() {
                 placeholder="e.g. GA5-040R-001"
                 value={serial}
                 onChange={(e) => setSerial(e.target.value)}
+              />
+            </div>
+
+            {/* Condition */}
+            <div className="space-y-1">
+              <div className="text-sm text-neutral-500">Condition</div>
+              <Select
+                items={CONDITION_OPTIONS}
+                triggerLabel={condition?.label || "Select condition"}
+                onSelect={setCondition}
               />
             </div>
 

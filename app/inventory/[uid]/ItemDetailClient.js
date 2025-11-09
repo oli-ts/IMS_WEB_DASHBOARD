@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import Link from "next/link";
 import { supabaseBrowser } from "../../../lib/supabase-browser";
 import { Card, CardContent, CardHeader } from "../../../components/ui/card";
@@ -9,6 +10,7 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
 import { buildZplForItem } from "../../../lib/zpl";
+import { CONDITION_OPTIONS, CONDITION_DB_CONST, getConditionOption, getConditionMeta } from "../../../lib/conditions";
 import { LiveStatusBadge } from "@/components/live-status-badge";
 import { QtyBadge } from "@/components/qty-badge";
 
@@ -33,6 +35,7 @@ export default function ItemDetailClient({ uid }) {
   const [previewSize, setPreviewSize] = useState("4x6");
   const [previewDpmm, setPreviewDpmm] = useState("8dpmm");
   const [previewZoom, setPreviewZoom] = useState(2);
+  const [printPending, setPrintPending] = useState(false);
   // accessories for parent items
   const [accessories, setAccessories] = useState([]);
 
@@ -43,6 +46,7 @@ export default function ItemDetailClient({ uid }) {
   const [bayList, setBayList] = useState([]);
   const [shelfList, setShelfList] = useState([]);
   const [efClassification, setEfClassification] = useState(null);
+  const [efCondition, setEfCondition] = useState(null);
   const [efWarehouse, setEfWarehouse] = useState(null);
   const [efZone, setEfZone] = useState(null);
   const [efBay, setEfBay] = useState(null);
@@ -129,6 +133,35 @@ export default function ItemDetailClient({ uid }) {
       }
     } finally {
       setPreviewLoading(false);
+    }
+  }
+
+  async function handleReprint(zplOverride) {
+    if (!uid) {
+      toast.error("Missing item uid");
+      return;
+    }
+    const payloadZpl = zplOverride || zpl;
+    if (!payloadZpl) {
+      toast.error("No label data to print");
+      return;
+    }
+    setPrintPending(true);
+    try {
+      const res = await fetch("/api/print-label", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ uid, zpl: payloadZpl || undefined }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j?.ok) {
+        throw new Error(j?.error || "Print failed");
+      }
+      toast.success("Label queued for print");
+    } catch (err) {
+      toast.error(err?.message || "Print failed");
+    } finally {
+      setPrintPending(false);
     }
   }
 
@@ -220,6 +253,8 @@ export default function ItemDetailClient({ uid }) {
     };
   }, [item, live]);
 
+  const conditionMeta = useMemo(() => getConditionMeta(item?.condition), [item?.condition]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -228,6 +263,11 @@ export default function ItemDetailClient({ uid }) {
           <div className="text-sm text-neutral-500">Item</div>
           <h1 className="text-2xl font-semibold">{item?.name || uid}</h1>
           <div className="text-sm text-neutral-600">UID: {uid}</div>
+          {conditionMeta && (
+            <div className="mt-2">
+              <ConditionBadge condition={item?.condition} />
+            </div>
+          )}
           {item?.source_table === "accessories" && item?.nested_parent_uid && (
             <div className="text-sm text-neutral-600 mt-1">
               Parent tool: <Link className="underline" href={`/inventory/${encodeURIComponent(item.nested_parent_uid)}`}>{item.nested_parent_uid}</Link>
@@ -298,6 +338,9 @@ export default function ItemDetailClient({ uid }) {
                 const classOpt = CLASS_OPTIONS.find((o) => o.value === classVal) || null;
                 setEfClassification(classOpt);
 
+                const conditionOpt = getConditionOption(item.condition);
+                setEfCondition(conditionOpt);
+
                 setEditOpen(true);
               }}
             >
@@ -329,7 +372,7 @@ export default function ItemDetailClient({ uid }) {
       </div>
 
       {/* Summary & Live status */}
-      <Card>
+      <Card className={conditionMeta?.cardClass || ""}>
         <CardHeader>Summary</CardHeader>
         <CardContent>
           {item ? (
@@ -392,6 +435,10 @@ export default function ItemDetailClient({ uid }) {
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Row label="Classification" value={item.classification} />
+                  <Row
+                    label="Condition"
+                    value={item?.condition ? <ConditionBadge condition={item.condition} /> : "—"}
+                  />
                   <Row label="Brand / Model" value={[item.brand, item.model].filter(Boolean).join(" ") || "—"} />
                   <Row label="Serial" value={item.serial_number || "—"} />
                   {/* Live and DB-reported status */}
@@ -521,22 +568,8 @@ export default function ItemDetailClient({ uid }) {
                 >
                   Download ZPL
                 </Button>
-                <Button
-                  onClick={async () => {
-                    try {
-                      const res = await fetch("/api/print-label", {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ uid, zpl }),
-                      });
-                      if (res.ok) alert("Label queued");
-                      else alert("Print failed");
-                    } catch {
-                      alert("Print failed");
-                    }
-                  }}
-                >
-                  Print Label
+                <Button disabled={printPending} onClick={() => handleReprint()}>
+                  {printPending ? "Printing…" : "Print Label"}
                 </Button>
                 <Button
                   variant="outline"
@@ -592,13 +625,13 @@ export default function ItemDetailClient({ uid }) {
           close={() => setEditOpen(false)}
           state={{
             whList, zoneList, bayList, shelfList,
-            efClassification, efWarehouse, efZone, efBay, efShelf,
+            efClassification, efCondition, efWarehouse, efZone, efBay, efShelf,
             efName, efBrand, efModel, efSerial, efUnit, efQty, efNotes,
             photoFile, photoAltFile, previewMain, previewAlt
           }}
           set={{
             setWhList, setZoneList, setBayList, setShelfList,
-            setEfClassification, setEfWarehouse, setEfZone, setEfBay, setEfShelf,
+            setEfClassification, setEfCondition, setEfWarehouse, setEfZone, setEfBay, setEfShelf,
             setEfName, setEfBrand, setEfModel, setEfSerial, setEfUnit, setEfQty, setEfNotes,
             setPhotoFile, setPhotoAltFile, setPreviewMain, setPreviewAlt
           }}
@@ -670,6 +703,19 @@ function Row({ label, value }) {
   );
 }
 
+function ConditionBadge({ condition, className = "" }) {
+  const meta = getConditionMeta(condition);
+  if (!meta) return null;
+  const classes = [
+    "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium",
+    meta.badgeClass,
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return <span className={classes}>{meta.label}</span>;
+}
+
 function fmtNum(n) {
   if (n === null || n === undefined) return "—";
   const v = Number(n);
@@ -693,13 +739,13 @@ function round2(x) { return Math.round(x * 100) / 100; }
 function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved }) {
   const {
     whList, zoneList, bayList, shelfList,
-    efClassification, efWarehouse, efZone, efBay, efShelf,
+    efClassification, efCondition, efWarehouse, efZone, efBay, efShelf,
     efName, efBrand, efModel, efSerial, efUnit, efQty, efNotes,
     photoFile, photoAltFile, previewMain, previewAlt
   } = state;
   const {
     setWhList, setZoneList, setBayList, setShelfList,
-    setEfClassification, setEfWarehouse, setEfZone, setEfBay, setEfShelf,
+    setEfClassification, setEfCondition, setEfWarehouse, setEfZone, setEfBay, setEfShelf,
     setEfName, setEfBrand, setEfModel, setEfSerial, setEfUnit, setEfQty, setEfNotes,
     setPhotoFile, setPhotoAltFile, setPreviewMain, setPreviewAlt
   } = set;
@@ -709,7 +755,7 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved }) 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={close} />
-      <div className="relative z-10 w-full max-w-5xl bg-white dark:bg-neutral-900 border rounded-xl shadow-xl p-4">
+      <div className="relative z-10 w-full max-w-5xl bg-white dark:bg-neutral-900 border rounded-xl shadow-xl p-4 max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <div className="text-lg font-semibold">Edit Item</div>
           <div className="flex gap-2">
@@ -724,6 +770,19 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved }) 
             <div className="text-sm">
               {(efClassification?.label || item?.classification || "").toString()}
               <span className="ml-2 text-neutral-500">(fixed by item type)</span>
+            </div>
+          </div>
+
+          {/* Condition */}
+          <div className="space-y-1">
+            <div className="text-sm text-neutral-500">Condition</div>
+            <Select
+              items={CONDITION_OPTIONS}
+              triggerLabel={efCondition?.label || "Select condition"}
+              onSelect={(opt) => setEfCondition(opt)}
+            />
+            <div className="text-xs text-neutral-500">
+              Same options as item creation: Good, Needs Maintenance, or Needs Repair.
             </div>
           </div>
 
@@ -909,6 +968,7 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved }) 
                     model: efModel || null,
                     serial_number: efSerial || null,
                     classification,
+                    condition: efCondition ? CONDITION_DB_CONST[efCondition.value] : null,
                     unit: efUnit || "pcs",
                     notes: efNotes || null,
                     quantity_total: Number(efQty) || 0,

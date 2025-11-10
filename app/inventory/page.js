@@ -26,18 +26,54 @@ export default function InventoryPage() {
   const [zoneMap, setZoneMap] = useState({});
   const [bayMap, setBayMap] = useState({});
   const [shelfMap, setShelfMap] = useState({});
+  const CACHE_KEYS = {
+    items: "inventory_items_v1",
+    warehouses: "inventory_warehouses_v1",
+    locations: "inventory_locations_v1",
+  };
+
+  function readCache(key) {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeCache(key, value) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  }
+
+  // Hydrate from cache immediately for snappier loads
+  useEffect(() => {
+    const cachedItems = readCache(CACHE_KEYS.items);
+    if (cachedItems?.data) setItems(cachedItems.data);
+
+    const cachedWarehouses = readCache(CACHE_KEYS.warehouses);
+    if (cachedWarehouses?.data) setWarehouses(cachedWarehouses.data);
+
+    const cachedLocations = readCache(CACHE_KEYS.locations);
+    if (cachedLocations?.zones) setZoneMap(cachedLocations.zones);
+    if (cachedLocations?.bays) setBayMap(cachedLocations.bays);
+    if (cachedLocations?.shelfs) setShelfMap(cachedLocations.shelfs);
+  }, []);
 
   useEffect(() => {
     (async () => {
       const { data: wh } = await sb
         .from("warehouse")
         .select("id, wh_number, name");
-      setWarehouses(
-        (wh || []).map((w) => ({
-          value: w.id,
-          label: `${w.wh_number || "WH"} — ${w.name}`,
-        }))
-      );
+      const mapped = (wh || []).map((w) => ({
+        value: w.id,
+        label: `${w.wh_number || "WH"} — ${w.name}`,
+      }));
+      setWarehouses(mapped);
+      writeCache(CACHE_KEYS.warehouses, { data: mapped, ts: Date.now() });
     })();
   }, []);
 
@@ -47,6 +83,7 @@ export default function InventoryPage() {
       if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
       const { data } = await query;
       setItems(data || []);
+      writeCache(CACHE_KEYS.items, { data: data || [], ts: Date.now(), warehouse: warehouse?.value || null });
     })();
   }, [warehouse]);
 
@@ -64,6 +101,7 @@ export default function InventoryPage() {
       setZoneMap(zMap);
       setBayMap(bMap);
       setShelfMap(sMap);
+      writeCache(CACHE_KEYS.locations, { zones: zMap, bays: bMap, shelfs: sMap, ts: Date.now() });
     })();
   }, []);
 
@@ -178,6 +216,7 @@ export default function InventoryPage() {
                         src={i.photo_url}
                         alt={`${i.name} photo`}
                         className="h-full w-full object-cover"
+                        loading="lazy"
                       />
                     ) : (
                       <div className="h-full w-full grid place-items-center text-xs text-neutral-400">

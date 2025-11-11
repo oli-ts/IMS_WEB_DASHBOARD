@@ -76,6 +76,7 @@ export default function ItemDetailClient({ uid }) {
     { value: "sundries", label: "Sundries (SUN)" },
     { value: "workshop_tools", label: "Workshop Tools (WT)" },
     { value: "vehicles", label: "Vehicles (VEH)" },
+    { value: "metal_diamonds", label: "Metal Diamonds (MD)" },
   ];
   const TABLE_CLASS_CONST = {
     light_tooling: "LIGHT_TOOL",
@@ -87,6 +88,7 @@ export default function ItemDetailClient({ uid }) {
     sundries: "SUNDRY",
     workshop_tools: "WORKSHOP_TOOL",
     vehicles: "VEHICLE",
+    metal_diamonds: "METAL_DIAMOND",
   };
   const DB_TO_CLASS_VALUE = Object.fromEntries(
     Object.entries(TABLE_CLASS_CONST).map(([k, v]) => [v, k])
@@ -174,21 +176,49 @@ export default function ItemDetailClient({ uid }) {
       const { data: items } = await sb
         .from("inventory_union")
         .select(
-          "source_table,id,uid,classification,name,brand,model,serial_number,photo_url,alt_photo_url,is_container,nested_parent_uid,condition,warehouse_id,zone_id,bay_id,shelf_id,case_uid,baseline_height_mm,set_size,location_last_seen,verified,qr_payload,notes,quantity_total,quantity_reserved,quantity_available,unit,status,assigned_to,created_at,updated_at"
+          "source_table,id,uid,classification,name,brand,model,serial_number,photo_url,alt_photo_url,is_container,nested_parent_uid,condition,warehouse_id,zone_id,bay_id,shelf_id,location_last_seen,verified,qr_payload,notes,quantity_total,quantity_reserved,quantity_available,unit,status,assigned_to,created_at,updated_at"
         )
         .eq("uid", uid)
         .limit(1);
       setMetalCaseCount(null);
       setMetalMeasurements([]);
 
-      const itm = items?.[0] || null;
-      setItem(itm);
+      let baseItem = items?.[0] || null;
+      let diamondFieldsLoaded = false;
 
-      const itmClassSlug = itm?.classification
-        ? DB_TO_CLASS_VALUE[itm.classification] || itm.classification
+      if (!baseItem) {
+        const { data: fallbackDiamond } = await sb
+          .from("metal_diamonds")
+          .select("*")
+          .eq("uid", uid)
+          .single();
+        if (fallbackDiamond) {
+          baseItem = {
+            ...fallbackDiamond,
+            source_table: "metal_diamonds",
+            classification: fallbackDiamond.classification || "METAL_DIAMOND",
+          };
+          diamondFieldsLoaded = true;
+        }
+      }
+
+      const itmClassSlug = baseItem?.classification
+        ? DB_TO_CLASS_VALUE[baseItem.classification] || baseItem.classification
         : null;
+      let itm = baseItem;
 
-      if (itmClassSlug === "metal_diamonds") {
+      if (itmClassSlug === "metal_diamonds" && baseItem?.uid) {
+        if (!diamondFieldsLoaded) {
+          const { data: diamondDetails } = await sb
+            .from("metal_diamonds")
+            .select("case_uid,baseline_height_mm,current_height_mm,set_size")
+            .eq("uid", baseItem.uid)
+            .single();
+          if (diamondDetails) {
+            itm = { ...baseItem, ...diamondDetails };
+          }
+        }
+
         if (itm?.case_uid) {
           const { count } = await sb
             .from("metal_diamonds")
@@ -205,6 +235,8 @@ export default function ItemDetailClient({ uid }) {
           .limit(10);
         setMetalMeasurements(meas || []);
       }
+
+      setItem(itm);
 
       // Load accessories for this item if any
       if (itm?.uid) {

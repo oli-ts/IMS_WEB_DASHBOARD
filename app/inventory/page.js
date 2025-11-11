@@ -81,9 +81,24 @@ export default function InventoryPage() {
     (async () => {
       let query = sb.from("inventory_union").select("*").limit(500);
       if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
-      const { data } = await query;
-      setItems(data || []);
-      writeCache(CACHE_KEYS.items, { data: data || [], ts: Date.now(), warehouse: warehouse?.value || null });
+      const { data: baseItems } = await query;
+      const safeItems = baseItems || [];
+
+      let metalQuery = sb.from("metal_diamonds").select("*").limit(500);
+      if (warehouse?.value) metalQuery = metalQuery.eq("warehouse_id", warehouse.value);
+      const { data: metalRaw } = await metalQuery;
+      const seen = new Set(safeItems.map((i) => i.uid));
+      const normalizedMetal = (metalRaw || [])
+        .filter((m) => m?.uid && !seen.has(m.uid))
+        .map((m) => ({
+          ...m,
+          source_table: m.source_table || "metal_diamonds",
+          classification: m.classification || "METAL_DIAMOND",
+        }));
+
+      const merged = [...safeItems, ...normalizedMetal];
+      setItems(merged);
+      writeCache(CACHE_KEYS.items, { data: merged, ts: Date.now(), warehouse: warehouse?.value || null });
     })();
   }, [warehouse]);
 
@@ -115,7 +130,7 @@ export default function InventoryPage() {
     const statusVals = uniq((items || []).map((i) => (i.status || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
 
     setBrands([{ value: "", label: "None" }, ...brandVals.map((v) => ({ value: v, label: v }))]);
-    const labelMap = { ACCESSORY: "Accessories (ACC)" };
+    const labelMap = { ACCESSORY: "Accessories (ACC)", METAL_DIAMOND: "Metal Diamonds (MD)" };
     setClassifications([{ value: "", label: "None" }, ...classVals.map((v) => ({ value: v, label: labelMap[v] || v }))]);
     setStatuses([{ value: "", label: "None" }, ...statusVals.map((v) => ({ value: v, label: v }))]);
   }, [items]);

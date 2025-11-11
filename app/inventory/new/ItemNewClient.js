@@ -20,12 +20,14 @@ const CLASS_OPTIONS = [
   { value: "sundries", label: "Sundries (SUN)" },
   { value: "workshop_tools", label: "Workshop Tools (WT)" },
   { value: "vehicles", label: "Vehicles (VEH)" },
+  { value: "metal_diamonds", label: "Metal Diamonds (MD)" },
 ];
 
 const UNIT_OPTIONS = [
   { value: "pcs", label: "pcs" },
   { value: "kg", label: "kg" },
   { value: "ltrs", label: "ltrs" },
+  { value: "set", label: "set" },
 ];
 
 const CLASS_DB_CONST = {
@@ -38,6 +40,7 @@ const CLASS_DB_CONST = {
   sundries: "SUNDRY",
   workshop_tools: "WORKSHOP_TOOL",
   vehicles: "VEHICLE",
+  metal_diamonds: "METAL_DIAMOND",
 };
 
 const PREFIX = {
@@ -50,6 +53,7 @@ const PREFIX = {
   sundries: "SUN",
   workshop_tools: "WT",
   vehicles: "VEH",
+  metal_diamonds: "MD",
 };
 
 export default function ItemNewClient() {
@@ -82,6 +86,8 @@ export default function ItemNewClient() {
   const [photoFile, setPhotoFile] = useState("");
   const [photoAltFile, setPhotoAltFile] = useState(null);
   const [printAfter, setPrintAfter] = useState(true);
+  const [baselineHeight, setBaselineHeight] = useState("");
+  const [caseUid, setCaseUid] = useState("");
   // Accessories UI state
   const [hasAccessories, setHasAccessories] = useState(false);
   const [accRows, setAccRows] = useState([]); // {_id,name,qty,brand,notes,photoFile,preview}
@@ -94,6 +100,11 @@ export default function ItemNewClient() {
     const url = URL.createObjectURL(file);
     setter(url);
   }
+
+  const selectedClass = classification?.value || null;
+  const uidPrefix = selectedClass ? PREFIX[selectedClass] : null;
+  const isMetalDiamond = selectedClass === "metal_diamonds";
+  const canHaveAccessories = ["light_tooling", "heavy_tooling", "vehicles"].includes(selectedClass || "");
 
   // Load warehouse list
   useEffect(() => {
@@ -162,11 +173,17 @@ export default function ItemNewClient() {
     })();
   }, [bay, sb]);
 
-  const selectedClass = classification?.value || null;
-  const uidPrefix = selectedClass ? PREFIX[selectedClass] : null;
-  const canHaveAccessories = ["light_tooling", "heavy_tooling", "vehicles"].includes(selectedClass || "");
+  useEffect(() => {
+    if (!isMetalDiamond) {
+      setBaselineHeight("");
+      setCaseUid("");
+    }
+  }, [isMetalDiamond]);
 
   const canSubmit = useMemo(() => {
+    const baselineOk =
+      !isMetalDiamond ||
+      (baselineHeight !== "" && Number.isFinite(Number(baselineHeight)));
     return (
       !!selectedClass &&
       !!warehouse?.value &&
@@ -175,9 +192,10 @@ export default function ItemNewClient() {
       !!shelf?.value &&
       !!name &&
       !!unit &&
-      Number(qty) >= 0
+      Number(qty) >= 0 &&
+      baselineOk
     );
-  }, [selectedClass, warehouse, zone, bay, shelf, name, unit, qty]);
+  }, [selectedClass, warehouse, zone, bay, shelf, name, unit, qty, baselineHeight, isMetalDiamond]);
 
   function genRandom(n = 5) {
     const digits = "0123456789";
@@ -210,6 +228,8 @@ export default function ItemNewClient() {
       const prefix = uidPrefix;
       const baseUid = uid?.trim() || `${prefix}-${genRandom(4)}`;
       const finalUid = await ensureUid(baseUid);
+      const baselineHeightNumber = Number(baselineHeight);
+      const normalizedCaseUid = (caseUid || "").trim();
 
       // Optional: upload photo first to get its URL
       let photo_url = null;
@@ -280,8 +300,32 @@ export default function ItemNewClient() {
         payload.quantity_reserved = payload.quantity_reserved ?? 0;
       }
 
-      const { error } = await sb.from(table).insert(payload);
-      if (error) throw error;
+      if (isMetalDiamond) {
+        if (!Number.isFinite(baselineHeightNumber)) {
+          throw new Error("Baseline height is required for metal diamonds.");
+        }
+        payload.baseline_height_mm = baselineHeightNumber;
+        payload.set_size = 9;
+        payload.unit = "set";
+        payload.case_uid = normalizedCaseUid || null;
+        payload.current_height_mm = baselineHeightNumber;
+
+        const { error: metalErr } = await sb.from("metal_diamonds").insert(payload);
+        if (metalErr) throw metalErr;
+
+        const { error: measErr } = await sb.from("metal_diamond_measurements").insert({
+          diamond_uid: finalUid,
+          baseline_at_measure_mm: baselineHeightNumber,
+          current_height_mm: baselineHeightNumber,
+          notes: "Initial baseline",
+        });
+        if (measErr) throw measErr;
+
+        await sb.rpc("metal_diamond_apply_latest", { p_uid: finalUid }).catch(() => {});
+      } else {
+        const { error } = await sb.from(table).insert(payload);
+        if (error) throw error;
+      }
 
       // Insert child accessories if applicable
       if (canHaveAccessories && hasAccessories) {
@@ -416,6 +460,30 @@ export default function ItemNewClient() {
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
+
+            {isMetalDiamond && (
+              <>
+                <div className="space-y-1">
+                  <div className="text-sm text-neutral-500">Baseline Height (mm)*</div>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    placeholder="e.g. 42.5"
+                    value={baselineHeight}
+                    onChange={(e) => setBaselineHeight(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm text-neutral-500">Case UID</div>
+                  <Input
+                    placeholder="Optional case UID"
+                    value={caseUid}
+                    onChange={(e) => setCaseUid(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
 
             {/* Brand / Model */}
             <div className="space-y-1">

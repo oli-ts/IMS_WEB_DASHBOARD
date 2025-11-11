@@ -38,6 +38,8 @@ export default function ItemDetailClient({ uid }) {
   const [printPending, setPrintPending] = useState(false);
   // accessories for parent items
   const [accessories, setAccessories] = useState([]);
+  const [metalCaseCount, setMetalCaseCount] = useState(null);
+  const [metalMeasurements, setMetalMeasurements] = useState([]);
 
   // edit modal state
   const [editOpen, setEditOpen] = useState(false);
@@ -172,12 +174,37 @@ export default function ItemDetailClient({ uid }) {
       const { data: items } = await sb
         .from("inventory_union")
         .select(
-          "source_table,id,uid,classification,name,brand,model,serial_number,photo_url,alt_photo_url,is_container,nested_parent_uid,condition,warehouse_id,zone_id,bay_id,shelf_id,location_last_seen,verified,qr_payload,notes,quantity_total,quantity_reserved,quantity_available,unit,status,assigned_to,created_at,updated_at"
+          "source_table,id,uid,classification,name,brand,model,serial_number,photo_url,alt_photo_url,is_container,nested_parent_uid,condition,warehouse_id,zone_id,bay_id,shelf_id,case_uid,baseline_height_mm,set_size,location_last_seen,verified,qr_payload,notes,quantity_total,quantity_reserved,quantity_available,unit,status,assigned_to,created_at,updated_at"
         )
         .eq("uid", uid)
         .limit(1);
+      setMetalCaseCount(null);
+      setMetalMeasurements([]);
+
       const itm = items?.[0] || null;
       setItem(itm);
+
+      const itmClassSlug = itm?.classification
+        ? DB_TO_CLASS_VALUE[itm.classification] || itm.classification
+        : null;
+
+      if (itmClassSlug === "metal_diamonds") {
+        if (itm?.case_uid) {
+          const { count } = await sb
+            .from("metal_diamonds")
+            .select("uid", { count: "exact", head: true })
+            .eq("case_uid", itm.case_uid);
+          setMetalCaseCount(typeof count === "number" ? count : null);
+        }
+
+        const { data: meas } = await sb
+          .from("metal_diamond_measurements")
+          .select("*")
+          .eq("diamond_uid", uid)
+          .order("measured_at", { ascending: false })
+          .limit(10);
+        setMetalMeasurements(meas || []);
+      }
 
       // Load accessories for this item if any
       if (itm?.uid) {
@@ -254,6 +281,10 @@ export default function ItemDetailClient({ uid }) {
   }, [item, live]);
 
   const conditionMeta = useMemo(() => getConditionMeta(item?.condition), [item?.condition]);
+  const classificationSlug = useMemo(() => {
+    if (!item?.classification) return null;
+    return DB_TO_CLASS_VALUE[item.classification] || item.classification;
+  }, [item?.classification]);
 
   return (
     <div className="space-y-6">
@@ -413,7 +444,7 @@ export default function ItemDetailClient({ uid }) {
 
               {/* Consumable qty badges */}
               {(() => {
-                const cls = item.classification;
+                const cls = classificationSlug || item.classification;
                 const show = [
                   "sundries",
                   "ppe",
@@ -450,7 +481,9 @@ export default function ItemDetailClient({ uid }) {
                 </div>
                 <div className="space-y-1">
                   <Row label="Quantity (total)" value={fmtNum(qty.total)} />
-                  {!["sundries","ppe","consumables_material","consumable_equipment"].includes(item.classification) && (
+                  {!["sundries","ppe","consumables_material","consumable_equipment"].includes(
+                    classificationSlug || item.classification
+                  ) && (
                     <>
                       <Row label="On job (live)" value={fmtNum(qty.onJobs)} />
                       <Row label="In warehouse (live)" value={fmtNum(qty.inWarehouse)} />
@@ -499,6 +532,61 @@ export default function ItemDetailClient({ uid }) {
           )}
         </CardContent>
       </Card>
+
+      {classificationSlug === "metal_diamonds" && (
+        <Card>
+          <CardHeader>Metal Diamond</CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <div className="text-sm text-neutral-500">Baseline Height (mm)</div>
+                <div className="text-lg font-semibold">{fmtMm(item?.baseline_height_mm)}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-sm text-neutral-500">Set Size</div>
+                <div className="text-lg font-semibold">{fmtNum(item?.set_size)}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-sm text-neutral-500">Case UID</div>
+                <div className="text-lg font-semibold">{item?.case_uid || "—"}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-sm text-neutral-500">Diamonds In Case</div>
+                <div className="text-lg font-semibold">{fmtNum(metalCaseCount)}</div>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <div className="text-sm text-neutral-500">Latest Measurements</div>
+              {metalMeasurements.length ? (
+                <ul className="mt-2 space-y-2">
+                  {metalMeasurements.map((m) => (
+                    <li
+                      key={m.id || `${m.measured_at || ""}-${m.current_height_mm || ""}`}
+                      className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800"
+                    >
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-base font-semibold">{fmtMm(m.current_height_mm)}</div>
+                          <div className="text-xs text-neutral-500">{fmtDateTime(m.measured_at)}</div>
+                        </div>
+                        <div className="text-xs text-neutral-500 text-right">
+                          Baseline {fmtMm(m.baseline_at_measure_mm)}
+                        </div>
+                      </div>
+                      {m.notes ? (
+                        <div className="text-sm text-neutral-600 mt-1">{m.notes}</div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-sm text-neutral-500 mt-2">No measurements logged yet.</div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Accessories list for parent tools */}
       {accessories.length > 0 && (
@@ -723,6 +811,11 @@ function fmtNum(n) {
   return String(v);
 }
 
+function fmtMm(n) {
+  const base = fmtNum(n);
+  return base === "—" ? base : `${base} mm`;
+}
+
 function fmtRef(ref) {
   if (!ref) return "—";
   // expected forms: "warehouse:STAGING-A", "van:<uuid>", "job:<uuid>"
@@ -731,6 +824,13 @@ function fmtRef(ref) {
   if (t === "van") return `van ${id?.slice(0, 8) || ""}`;
   if (t === "job") return `job ${id?.slice(0, 8) || ""}`;
   return ref;
+}
+
+function fmtDateTime(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 function round2(x) { return Math.round(x * 100) / 100; }

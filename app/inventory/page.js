@@ -79,14 +79,19 @@ export default function InventoryPage() {
 
   useEffect(() => {
     (async () => {
-      let query = sb.from("inventory_union").select("*").limit(500);
+      let query = sb.from("inventory_union").select("*");
       if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
-      const { data: baseItems } = await query;
+      // Order newest-first so the 500-row cap never hides recently added items
+      const { data: baseItems } = await query
+        .order("created_at", { ascending: false, nullsFirst: false })
+        .limit(1000);
       const safeItems = baseItems || [];
 
-      let metalQuery = sb.from("metal_diamonds").select("*").limit(500);
+      let metalQuery = sb.from("metal_diamonds").select("*");
       if (warehouse?.value) metalQuery = metalQuery.eq("warehouse_id", warehouse.value);
-      const { data: metalRaw } = await metalQuery;
+      const { data: metalRaw } = await metalQuery
+        .order("created_at", { ascending: false, nullsFirst: false })
+        .limit(500);
       const seen = new Set(safeItems.map((i) => i.uid));
       const normalizedMetal = (metalRaw || [])
         .filter((m) => m?.uid && !seen.has(m.uid))

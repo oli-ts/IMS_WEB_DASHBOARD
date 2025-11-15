@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "../../../lib/supabase-browser";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
+import { toast } from "sonner";
 
 export default function ManifestDetailClient({ manifestId }) {
   const sb = supabaseBrowser();
@@ -95,21 +96,34 @@ export default function ManifestDetailClient({ manifestId }) {
   // Search inventory to add
   const [q, setQ] = useState("");
   const [inv, setInv] = useState([]);
+  const [kitResults, setKitResults] = useState([]);
   useEffect(() => {
     const run = async () => {
-      if (!q?.trim()) { setInv([]); return; }
-      let query = sb.from("inventory_union")
+      if (!q?.trim()) { setInv([]); setKitResults([]); return; }
+      let itemQuery = sb.from("inventory_union")
         .select("uid,name,classification,brand,model,photo_url,status")
         .ilike("name", `%${q}%`)
         .limit(25);
       if (/^[A-Z]{2,5}-/.test(q.trim().toUpperCase())) {
-        query = sb.from("inventory_union")
+        itemQuery = sb.from("inventory_union")
           .select("uid,name,classification,brand,model,photo_url,status")
           .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
           .limit(25);
       }
-      const { data } = await query;
-      setInv(data || []);
+      const [itemRes, kitsRes] = await Promise.all([
+        itemQuery,
+        fetch(`/api/kits/search?q=${encodeURIComponent(q)}`)
+      ]);
+      if (itemRes?.error) {
+        console.error("Inventory search failed", itemRes.error);
+      }
+      setInv(itemRes?.data || []);
+      if (kitsRes.ok) {
+        const payload = await kitsRes.json().catch(() => ({}));
+        setKitResults(payload?.data || []);
+      } else {
+        setKitResults([]);
+      }
     };
     const t = setTimeout(run, 250);
     return () => clearTimeout(t);
@@ -142,6 +156,23 @@ export default function ManifestDetailClient({ manifestId }) {
   async function removeLine(lineId) {
     await sb.from("manifest_items").delete().eq("id", lineId);
     await loadItems();
+  }
+
+  async function addKitToManifest(kitId) {
+    try {
+      const { data, error } = await sb
+        .from("kit_items")
+        .select("item_uid,quantity")
+        .eq("kit_id", kitId);
+      if (error) throw error;
+      for (const row of data || []) {
+        await addItemToManifest(row.item_uid, row.quantity || 1);
+      }
+      toast.success("Kit added");
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || "Failed to add kit");
+    }
   }
 
   const totals = useMemo(
@@ -197,6 +228,20 @@ export default function ManifestDetailClient({ manifestId }) {
         <div className="font-semibold">Add Items</div>
         <Input className="h-9 max-w-md" placeholder="Search inventory by name or UID" value={q} onChange={e=>setQ(e.target.value)} />
         <div className="grid gap-2 max-h-[420px] overflow-auto">
+          {kitResults.map(k => (
+            <div key={k.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
+              <div>
+                <div className="font-medium">{k.name}</div>
+                <div className="text-xs text-neutral-500">
+                  Kit · {k.item_count || 0} items
+                </div>
+                {k.description ? (
+                  <div className="text-xs text-neutral-500 mt-1">{k.description}</div>
+                ) : null}
+              </div>
+              <Button size="sm" variant="outline" onClick={() => addKitToManifest(k.id)}>Add Kit</Button>
+            </div>
+          ))}
           {inv.map(i => (
             <div key={i.uid} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -215,7 +260,7 @@ export default function ManifestDetailClient({ manifestId }) {
               <AddInline uid={i.uid} onAdd={addItemToManifest} />
             </div>
           ))}
-          {q && inv.length === 0 && <div className="text-sm text-neutral-500">No matches.</div>}
+          {q && inv.length === 0 && kitResults.length === 0 && <div className="text-sm text-neutral-500">No matches.</div>}
         </div>
       </div>
     </div>

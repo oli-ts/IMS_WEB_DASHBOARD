@@ -64,6 +64,9 @@ export default function ItemDetailClient({ uid }) {
   const [photoAltFile, setPhotoAltFile] = useState(null);
   const [previewMain, setPreviewMain] = useState(null);
   const [previewAlt, setPreviewAlt] = useState(null);
+  const [currentRole, setCurrentRole] = useState(null);
+  const [deletePending, setDeletePending] = useState(false);
+  const [zoneName, setZoneName] = useState(null);
 
   // classification options & constants
   const CLASS_OPTIONS = [
@@ -166,6 +169,35 @@ export default function ItemDetailClient({ uid }) {
       toast.error(err?.message || "Print failed");
     } finally {
       setPrintPending(false);
+    }
+  }
+
+  async function handleDeleteItem() {
+    if (!item || deletePending) return;
+    if (!isAdmin) return;
+    const confirmed = window.confirm(
+      `Delete "${item.name || uid}"? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setDeletePending(true);
+    try {
+      const res = await fetch(`/api/items/${encodeURIComponent(uid)}`, {
+        method: "DELETE",
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload?.ok) {
+        throw new Error(payload?.error || "Failed to delete item");
+      }
+      toast.success("Item deleted");
+      try {
+        window.localStorage.removeItem("inventory_items_v1");
+      } catch {}
+      window.location.href = "/inventory";
+    } catch (err) {
+      console.error("Failed to delete item", err);
+      toast.error(err?.message || "Failed to delete item");
+    } finally {
+      setDeletePending(false);
     }
   }
 
@@ -296,6 +328,61 @@ export default function ItemDetailClient({ uid }) {
     })();
   }, [uid, sb]);
 
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!item?.zone_id) {
+        if (active) setZoneName(null);
+        return;
+      }
+      try {
+        const { data, error } = await sb
+          .from("zones")
+          .select("name")
+          .eq("id", item.zone_id)
+          .maybeSingle();
+        if (!active) return;
+        if (error) throw error;
+        setZoneName(data?.name || null);
+      } catch (err) {
+        if (active) setZoneName(null);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [item?.zone_id, sb]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const {
+          data: { user },
+        } = await sb.auth.getUser();
+        if (cancelled) return;
+        if (!user?.id) {
+          setCurrentRole(null);
+          return;
+        }
+        const { data, error } = await sb
+          .from("staff")
+          .select("id, role")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) throw error;
+        setCurrentRole(data?.role || null);
+      } catch (err) {
+        console.error("Failed to fetch staff role", err);
+        if (!cancelled) setCurrentRole(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sb]);
+
   // qty breakdown (derived)
   const qty = useMemo(() => {
     if (!item) return { total: null, available: null, reserved: null, unit: "pcs" };
@@ -317,6 +404,13 @@ export default function ItemDetailClient({ uid }) {
     if (!item?.classification) return null;
     return DB_TO_CLASS_VALUE[item.classification] || item.classification;
   }, [item?.classification]);
+  const isAdmin = useMemo(() => {
+    const role = (currentRole || "").toLowerCase();
+    return role === "admin" || role === "sysadmin";
+  }, [currentRole]);
+  const isStoreRoomZone = useMemo(() => {
+    return (zoneName || "").trim().toLowerCase() === "storeroom";
+  }, [zoneName]);
 
   return (
     <div className="space-y-6">
@@ -431,6 +525,15 @@ export default function ItemDetailClient({ uid }) {
           >
             Reprint Label
           </Button>
+          {isAdmin && item ? (
+            <Button
+              variant="destructive"
+              disabled={deletePending}
+              onClick={handleDeleteItem}
+            >
+              {deletePending ? "Deleting..." : "Delete Item"}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -758,6 +861,8 @@ export default function ItemDetailClient({ uid }) {
           sb={sb}
           TABLE_CLASS_CONST={TABLE_CLASS_CONST}
           onSaved={(patch) => setItem((prev) => ({ ...prev, ...patch }))}
+          isAdmin={isAdmin}
+          isStoreRoomZone={isStoreRoomZone}
         />
       )}
 
@@ -868,7 +973,7 @@ function fmtDateTime(value) {
 function round2(x) { return Math.round(x * 100) / 100; }
 
 /* Edit modal extracted for clarity */
-function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved }) {
+function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, isAdmin, isStoreRoomZone }) {
   const {
     whList, zoneList, bayList, shelfList,
     efClassification, efCondition, efWarehouse, efZone, efBay, efShelf,
@@ -1064,6 +1169,12 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved }) 
                 try {
                   const table = item.source_table;
                   const id = item.id;
+                  const originalZone = item.zone_id ?? null;
+                  const nextZone = efZone?.value || null;
+                  if (!isAdmin && isStoreRoomZone && originalZone !== nextZone) {
+                    toast.error("You do not have access to do this.");
+                    return;
+                  }
 
                   // Upload photos if changed
                   let photo_url = item.photo_url || null;

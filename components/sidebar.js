@@ -11,6 +11,7 @@ const links = [
   { href: "/vans", label: "Vans" },
   { href: "/transfers", label: "Transfers" },
   { href: "/templates", label: "Templates" },
+  { href: "/kits", label: "Kits" },
   { href: "/reporting", label: "Reporting" },
   { href: "/settings", label: "Settings" },
   { href: '/checkout', label: 'Check-Out' },

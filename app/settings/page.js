@@ -3,19 +3,91 @@ import { useEffect, useState } from "react";
 import { supabaseBrowser } from "../../lib/supabase-browser";
 import { Input } from "../../components/ui/input";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent } from "../../components/ui/card";
+import { Card, CardContent, CardHeader } from "../../components/ui/card";
+import { toast } from "sonner";
 
 export default function Settings() {
   const sb = supabaseBrowser();
 
   // Users
   const [users, setUsers] = useState([]);
+  const [me, setMe] = useState(null);
+  const [meLoading, setMeLoading] = useState(true);
+  const [newAdminName, setNewAdminName] = useState("");
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [creatingAdmin, setCreatingAdmin] = useState(false);
+
+  async function loadUsers() {
+    try {
+      const { data, error } = await sb.from("staff").select("id,name,role");
+      if (error) throw error;
+      setUsers(data || []);
+    } catch (err) {
+      console.error("Failed to load staff", err);
+    }
+  }
+  useEffect(() => {
+    loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     (async () => {
-      const { data } = await sb.from("staff").select("id,name,role");
-      setUsers(data || []);
+      try {
+        const {
+          data: { user },
+        } = await sb.auth.getUser();
+        if (!user?.id) {
+          setMe(null);
+          return;
+        }
+        const { data } = await sb
+          .from("staff")
+          .select("id,name,role")
+          .eq("id", user.id)
+          .maybeSingle();
+        setMe(data || null);
+      } catch (err) {
+        console.error("Current user lookup failed", err);
+        setMe(null);
+      } finally {
+        setMeLoading(false);
+      }
     })();
   }, []);
+
+  const isAdmin = ["admin", "sysadmin"].includes((me?.role || "").toLowerCase());
+
+  async function handleCreateAdmin(event) {
+    event.preventDefault();
+    if (!isAdmin || creatingAdmin) return;
+    const name = newAdminName.trim();
+    const email = newAdminEmail.trim().toLowerCase();
+    if (!name || !email) {
+      toast.error("Name and email are required");
+      return;
+    }
+    setCreatingAdmin(true);
+    try {
+      const res = await fetch("/api/admin/create", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, email }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload?.error || "Failed to create admin");
+      }
+      toast.success("Admin account created");
+      setNewAdminName("");
+      setNewAdminEmail("");
+      await loadUsers();
+    } catch (err) {
+      toast.error(err?.message || "Failed to create admin");
+    } finally {
+      setCreatingAdmin(false);
+    }
+  }
 
   // Warehouse layout state
   const [warehouses, setWarehouses] = useState([]);
@@ -170,6 +242,36 @@ export default function Settings() {
         >
           Sign out
         </button>
+        {isAdmin && !meLoading && (
+          <Card>
+            <CardHeader>Create New Admin</CardHeader>
+            <CardContent>
+              <form className="space-y-3" onSubmit={handleCreateAdmin}>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    placeholder="Full name"
+                    value={newAdminName}
+                    onChange={(e) => setNewAdminName(e.target.value)}
+                  />
+                  <Input
+                    placeholder="Work email"
+                    value={newAdminEmail}
+                    onChange={(e) => setNewAdminEmail(e.target.value)}
+                    type="email"
+                  />
+                </div>
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <p className="text-xs text-neutral-500">
+                    We generate a temporary password automatically; ask the new admin to run "Forgot password" on first login.
+                  </p>
+                  <Button type="submit" disabled={creatingAdmin}>
+                    {creatingAdmin ? "Creating..." : "Create admin"}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
         <div className="grid gap-2">
           {users.map((u) => (
             <div key={u.id} className="p-3 rounded-xl border dark:border-neutral-800 bg-white dark:bg-neutral-900">

@@ -26,6 +26,7 @@ export default function InventoryPage() {
   const [zoneMap, setZoneMap] = useState({});
   const [bayMap, setBayMap] = useState({});
   const [shelfMap, setShelfMap] = useState({});
+  const [groupRows, setGroupRows] = useState([]);
   const CACHE_KEYS = {
     items: "inventory_items_v1",
     warehouses: "inventory_warehouses_v1",
@@ -140,26 +141,81 @@ export default function InventoryPage() {
     setStatuses([{ value: "", label: "None" }, ...statusVals.map((v) => ({ value: v, label: v }))]);
   }, [items]);
 
-  const filtered = useMemo(
-    () =>
-      items.filter((i) => {
-        const hay = (
-          i.uid +
-          " " +
-          i.name +
-          " " +
-          (i.brand || "") +
-          " " +
-          (i.model || "")
-        ).toLowerCase();
-        if (q && !hay.includes(q.toLowerCase())) return false;
-        if (brand?.value && (i.brand || "") !== brand.value) return false;
-        if (classification?.value && (i.classification || "") !== classification.value) return false;
-        if (status?.value && (i.status || "") !== status.value) return false;
-        return true;
-      }),
-    [items, q, brand, classification, status]
-  );
+  const itemsByUid = useMemo(() => Object.fromEntries(items.map((itm) => [itm.uid, itm])), [items]);
+
+  useEffect(() => {
+    let isActive = true;
+    if (!q?.trim()) {
+      setGroupRows([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const { data, error } = await sb.rpc("find_group_items", { search_text: q });
+        if (error) throw error;
+        if (!isActive) return;
+        setGroupRows(data || []);
+      } catch (err) {
+        console.error("[inventory] group search failed", err?.message || err);
+        if (isActive) setGroupRows([]);
+      }
+    }, 200);
+    return () => {
+      isActive = false;
+      clearTimeout(t);
+    };
+  }, [q, sb]);
+
+  const groupMetaByUid = useMemo(() => {
+    const map = {};
+    for (const row of groupRows || []) {
+      if (!row?.item_uid) continue;
+      map[row.item_uid] = {
+        group_id: row.group_id,
+        group_name: row.group_name,
+      };
+    }
+    return map;
+  }, [groupRows]);
+
+  const filtered = useMemo(() => {
+    const lower = q?.toLowerCase() || "";
+    const base = items.filter((i) => {
+      const hay = (
+        i.uid +
+        " " +
+        i.name +
+        " " +
+        (i.brand || "") +
+        " " +
+        (i.model || "")
+      ).toLowerCase();
+      if (q && !hay.includes(lower)) return false;
+      if (brand?.value && (i.brand || "") !== brand.value) return false;
+      if (classification?.value && (i.classification || "") !== classification.value) return false;
+      if (status?.value && (i.status || "") !== status.value) return false;
+      return true;
+    });
+    if (!q?.trim() || !groupRows?.length) return base;
+    const ordered = new Map();
+    for (const item of base) {
+      const meta = groupMetaByUid[item.uid];
+      ordered.set(item.uid, meta ? { ...item, _groupMeta: meta } : item);
+    }
+    for (const row of groupRows) {
+      const uid = row?.item_uid;
+      if (!uid) continue;
+      if (!itemsByUid[uid]) continue;
+      const meta = { group_id: row.group_id, group_name: row.group_name };
+      if (ordered.has(uid)) {
+        const existing = ordered.get(uid);
+        ordered.set(uid, { ...existing, _groupMeta: meta });
+      } else {
+        ordered.set(uid, { ...itemsByUid[uid], _groupMeta: meta });
+      }
+    }
+    return Array.from(ordered.values());
+  }, [items, brand, classification, status, q, groupRows, groupMetaByUid, itemsByUid]);
 
   // Live statuses for filtered items
   const uids = useMemo(() => filtered.map((i) => i.uid), [filtered]);
@@ -250,6 +306,11 @@ export default function InventoryPage() {
                 <div className=" grid-cols-2">
                 <div className="text-sm text-neutral-500">
                   {i.classification}
+                  {i._groupMeta?.group_name ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                      Group: {i._groupMeta.group_name}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="font-semibold">{i.name}</div>
                 <div className="text-sm">UID: {i.uid}</div>
@@ -336,7 +397,16 @@ export default function InventoryPage() {
                         </div>
                       </td>
                       <td className="py-2 pr-3 font-medium">{i.name}</td>
-                      <td className="py-2 pr-3">{i.classification}</td>
+                      <td className="py-2 pr-3">
+                        <div className="flex flex-col gap-1">
+                          <span>{i.classification}</span>
+                          {i._groupMeta?.group_name ? (
+                            <span className="inline-flex w-fit items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                              Group: {i._groupMeta.group_name}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
                       <td className="py-2 pr-3">{i.brand}</td>
                       <td className="py-2 pr-3">{i.quantity_total}</td>
                       <td className="py-2 pr-3">{(() => { const parts = []; const z = zoneMap[i.zone_id]; const b = bayMap[i.bay_id]; const s = shelfMap[i.shelf_id]; if (z) parts.push(`Zone: ${z}`); if (b) parts.push(`Bay: ${b}`); if (s) parts.push(`Shelf: ${s}`); return parts.length ? parts.join(" · ") : (i.location_last_seen || "-"); })()}</td>

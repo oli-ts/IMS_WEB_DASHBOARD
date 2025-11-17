@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "../../../lib/supabase-browser";
@@ -25,8 +25,11 @@ export default function TemplateDetailClient({ templateId }) {
   const [nameByUid, setNameByUid] = useState({});
   const [inv, setInv] = useState([]);
   const [kitResults, setKitResults] = useState([]);
+  const [groupSearchResults, setGroupSearchResults] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
+  const [groupRows, setGroupRows] = useState([]);
+  const groupMetaCache = useRef(new Map());
 
   const [zones, setZones] = useState([]);
   const [bays, setBays] = useState([]);
@@ -81,25 +84,61 @@ export default function TemplateDetailClient({ templateId }) {
 
   useEffect(() => {
     const run = async () => {
-      if (!q?.trim()) { setInv([]); setKitResults([]); return; }
+      if (!q?.trim()) { setInv([]); setKitResults([]); setGroupSearchResults([]); return; }
       let itemQuery = sb.from("inventory_union")
-        .select("uid,name,classification,brand,model,photo_url,status")
+        .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
+        .ilike("name", `%${q}%`)
+        .limit(25);
+      let metalQuery = sb.from("metal_diamonds")
+        .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
         .ilike("name", `%${q}%`)
         .limit(25);
       if (/^[A-Z]{2,5}-/.test(q.trim().toUpperCase())) {
         itemQuery = sb.from("inventory_union")
-          .select("uid,name,classification,brand,model,photo_url,status")
+          .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
+          .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
+          .limit(25);
+        metalQuery = sb.from("metal_diamonds")
+          .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
           .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
           .limit(25);
       }
-      const [itemRes, kitsRes] = await Promise.all([
+      const groupQuery = sb
+        .from("item_groups")
+        .select("id,name")
+        .ilike("name", `%${q}%`)
+        .limit(10);
+      const [itemRes, metalRes, groupRes, kitsRes] = await Promise.all([
         itemQuery,
-      fetch(`/api/kits/search?q=${encodeURIComponent(q)}`)
+        metalQuery,
+        groupQuery,
+        fetch(`/api/kits/search?q=${encodeURIComponent(q)}`)
       ]);
       if (itemRes?.error) {
         console.error("Inventory search failed", itemRes.error);
       }
-      setInv(itemRes?.data || []);
+      if (metalRes?.error) {
+        console.error("Metal search failed", metalRes.error);
+      }
+      const merged = [...(itemRes?.data || [])];
+      for (const row of metalRes?.data || []) {
+        if (!row?.uid) continue;
+        const normalized = {
+          ...row,
+          classification: row.classification || "METAL_DIAMOND",
+        };
+        const idx = merged.findIndex((r) => r.uid === normalized.uid);
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], ...normalized };
+        } else {
+          merged.push(normalized);
+        }
+      }
+      setInv(merged);
+      if (groupRes?.error) {
+        console.error("Group search failed", groupRes.error);
+      }
+      setGroupSearchResults(groupRes?.data || []);
       if (kitsRes.ok) {
         const payload = await kitsRes.json().catch(() => ({}));
         setKitResults(payload?.data || []);
@@ -111,12 +150,195 @@ export default function TemplateDetailClient({ templateId }) {
     return () => clearTimeout(t);
   }, [q, sb]);
 
-  async function addItemToTemplate(uid, qty = 1) {
+  useEffect(() => {
+    let active = true;
+    if (!q?.trim()) {
+      setGroupRows([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const { data, error } = await sb.rpc("find_group_items", { search_text: q });
+        if (error) throw error;
+        if (!active) return;
+        setGroupRows(data || []);
+      } catch (err) {
+        console.error("[template] group lookup failed", err?.message || err);
+        if (active) setGroupRows([]);
+      }
+    }, 200);
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [q, sb]);
+
+  useEffect(() => {
+    for (const row of groupRows || []) {
+      if (row?.item_uid && row.group_id) {
+        groupMetaCache.current.set(row.item_uid, {
+          group_id: row.group_id,
+          group_name: row.group_name || null,
+        });
+      }
+    }
+  }, [groupRows]);
+
+  const groupMetaByUid = useMemo(() => {
+    const map = {};
+    for (const row of groupRows || []) {
+      if (!row?.item_uid) continue;
+      map[row.item_uid] = {
+        group_id: row.group_id,
+        group_name: row.group_name || null,
+      };
+    }
+    return map;
+  }, [groupRows]);
+
+  async function getGroupMeta(uid) {
+    if (!uid) return null;
+    if (groupMetaCache.current.has(uid)) return groupMetaCache.current.get(uid);
+    try {
+      const { data, error } = await sb
+        .from("item_group_members")
+        .select("group_id, item_groups(name)")
+        .eq("item_uid", uid)
+        .limit(1)
+        .maybeSingle();
+      if (error || !data?.group_id) return null;
+      const meta = {
+        group_id: data.group_id,
+        group_name: data?.item_groups?.name || null,
+      };
+      groupMetaCache.current.set(uid, meta);
+      return meta;
+    } catch (err) {
+      console.error("[template] group meta fetch failed", err?.message || err);
+      return null;
+    }
+  }
+
+  async function getAvailableGroupUids(groupId) {
+    if (!groupId) return [];
+    try {
+      const { data, error } = await sb.rpc("available_group_members", { group_id: groupId });
+      if (error) throw error;
+      const list = (data || []).map((row) => row?.item_uid).filter(Boolean);
+      if (list.length) return list;
+    } catch (err) {
+      console.warn("[template] available_group_members rpc failed", err?.message || err);
+    }
+    try {
+      const { data: members, error: memberErr } = await sb
+        .from("item_group_members")
+        .select("item_uid")
+        .eq("group_id", groupId);
+      if (memberErr) throw memberErr;
+      const uids = (members || []).map((m) => m.item_uid).filter(Boolean);
+      if (!uids.length) return [];
+      const { data: allocations, error: allocErr } = await sb
+        .from("item_active_allocations")
+        .select("item_uid")
+        .in("item_uid", uids);
+      if (allocErr) throw allocErr;
+      const unavailable = new Set((allocations || []).map((a) => a.item_uid));
+      return uids.filter((uid) => !unavailable.has(uid));
+    } catch (err) {
+      console.warn("[template] group fallback failed", err?.message || err);
+      return [];
+    }
+  }
+
+  async function maybeAddGroupItemsToTemplate(baseUid) {
+    const meta = await getGroupMeta(baseUid);
+    if (!meta?.group_id) return;
+    try {
+      const existingSet = new Set(rows.map((r) => r.item_uid));
+      existingSet.add(baseUid);
+      const extras = (await getAvailableGroupUids(meta.group_id)).filter(
+        (uid) => uid && !existingSet.has(uid)
+      );
+      if (!extras.length) return;
+      const statusMap = await fetchStatuses(extras);
+      const allowed = extras.filter((uid) => (statusMap[uid] || "").toLowerCase() !== "broken");
+      const skipped = extras.length - allowed.length;
+      if (!allowed.length) {
+        if (skipped) toast.info("Skipped broken group items");
+        return;
+      }
+      const payload = allowed.map((uid) => ({
+        template_id: templateId,
+        item_uid: uid,
+        qty_required: 1,
+      }));
+      const { error: insErr } = await sb.from("manifest_template_items").insert(payload);
+      if (insErr) throw insErr;
+      toast.success(`Added ${payload.length} grouped item${payload.length > 1 ? "s" : ""}`);
+      if (skipped) toast.info("Skipped broken group items");
+    } catch (err) {
+      console.error("[template] grouped add failed", err?.message || err);
+    }
+  }
+
+  async function fetchStatuses(uids) {
+    if (!uids?.length) return {};
+    try {
+      const map = {};
+      const { data: inv } = await sb
+        .from("inventory_union")
+        .select("uid,status")
+        .in("uid", uids);
+      for (const row of inv || []) {
+        map[row.uid] = row.status || null;
+      }
+      const missing = uids.filter((uid) => !map[uid]);
+      if (missing.length) {
+        const { data: metal } = await sb
+          .from("metal_diamonds")
+          .select("uid,status")
+          .in("uid", missing);
+        for (const row of metal || []) {
+          map[row.uid] = row.status || null;
+        }
+      }
+      return map;
+    } catch (err) {
+      console.error("[template] status lookup failed", err?.message || err);
+      return {};
+    }
+  }
+
+  async function addGroupPlaceholder(groupId, groupName) {
+    if (!groupId) return;
+    try {
+      const pool = await getAvailableGroupUids(groupId);
+      if (!pool.length) return toast.error(`No available items in ${groupName}`);
+      const statusMap = await fetchStatuses(pool);
+      const existing = new Set(rows.map((r) => r.item_uid));
+      const filtered = pool.filter(
+        (uid) => !existing.has(uid) && (statusMap[uid] || "").toLowerCase() !== "broken"
+      );
+      if (!filtered.length) {
+        toast.error(`No usable items in ${groupName}`);
+        return;
+      }
+      const choice = filtered[Math.floor(Math.random() * filtered.length)];
+      await addItemToTemplate(choice, 1, { skipGroupCascade: true });
+    } catch (err) {
+      console.error("[template] add group placeholder failed", err?.message || err);
+      toast.error(err?.message || "Failed to add group item");
+    }
+  }
+
+  async function addItemToTemplate(uid, qty = 1, opts = {}) {
+    const skipGroupCascade = Boolean(opts?.skipGroupCascade);
     try {
       const payload = { template_id: templateId, item_uid: uid, qty_required: Number(qty) || 1 };
       const { error } = await sb.from("manifest_template_items").insert(payload);
       if (error) throw error;
       toast.success(`Added ${uid}`);
+      if (!skipGroupCascade) await maybeAddGroupItemsToTemplate(uid);
       await loadTemplateItems();
     } catch (err) {
       console.error(err);
@@ -155,7 +377,7 @@ export default function TemplateDetailClient({ templateId }) {
         .eq("kit_id", kitId);
       if (error) throw error;
       for (const row of data || []) {
-        await addItemToTemplate(row.item_uid, row.quantity || 1);
+        await addItemToTemplate(row.item_uid, row.quantity || 1, { skipGroupCascade: true });
       }
       toast.success("Kit added");
     } catch (err) {
@@ -251,24 +473,36 @@ export default function TemplateDetailClient({ templateId }) {
                       <div className="text-xs text-neutral-500">Kit · {k.item_count || 0} items</div>
                       {k.description ? <div className="text-xs text-neutral-500 mt-1">{k.description}</div> : null}
                     </div>
-                    <Button size="sm" variant="outline" onClick={()=>addKitToTemplate(k.id)}>Add Kit</Button>
+                  <Button size="sm" variant="outline" onClick={()=>addKitToTemplate(k.id)}>Add Kit</Button>
+                </div>
+              ))}
+                {groupSearchResults.map((g) => (
+                  <div key={g.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">Any {g.name}</div>
+                      <div className="text-xs text-neutral-500">Pick a random available member of this group.</div>
+                    </div>
+                    <Button size="sm" onClick={() => addGroupPlaceholder(g.id, g.name)}>Add Any</Button>
                   </div>
                 ))}
                 {inv.map(i => (
                   <div key={i.uid} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700">
-                        {i.photo_url ? (
-                          <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
-                        )}
-                      </div>
-                      <div>
-                        <div className="font-medium">{i.name}</div>
-                        <div className="text-xs text-neutral-500">{i.uid} · {i.classification}</div>
-                      </div>
-                    </div>
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700">
+                    {i.photo_url ? (
+                      <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="font-medium">{i.name}</div>
+                    <div className="text-xs text-neutral-500">{i.uid} · {i.classification}</div>
+                    {groupMetaByUid[i.uid]?.group_name ? (
+                      <div className="text-xs text-blue-600 mt-1">Group: {groupMetaByUid[i.uid].group_name}</div>
+                    ) : null}
+                  </div>
+                </div>
                     <AddInline uid={i.uid} onAdd={addItemToTemplate} />
                   </div>
                 ))}

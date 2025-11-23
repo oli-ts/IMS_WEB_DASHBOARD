@@ -13,6 +13,7 @@ const links = [
   { href: "/templates", label: "Templates" },
   { href: "/kits", label: "Kits" },
   { href: "/reporting", label: "Reporting" },
+  { href: "/audit", label: "Audit" },
   { href: "/settings", label: "Settings" },
   { href: '/checkout', label: 'Check-Out' },
   { href: '/checkin', label: 'Check-In' },

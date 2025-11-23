@@ -7,12 +7,16 @@ import { Select } from "../../components/ui/select";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { useLiveStatuses } from "@/lib/hooks/useLiveStatuses";
+import { getConditionMeta } from "@/lib/conditions";
 import { LiveStatusBadge } from "@/components/live-status-badge";
 import { QtyBadge } from "@/components/qty-badge";
+import { toast } from "sonner";
 
 export default function InventoryPage() {
   const sb = supabaseBrowser();
   const [items, setItems] = useState([]);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 60;
   const [q, setQ] = useState("");
   const [warehouse, setWarehouse] = useState(null);
   const [warehouses, setWarehouses] = useState([]);
@@ -27,11 +31,17 @@ export default function InventoryPage() {
   const [bayMap, setBayMap] = useState({});
   const [shelfMap, setShelfMap] = useState({});
   const [groupRows, setGroupRows] = useState([]);
+  const [isIpad, setIsIpad] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [showConditionStyling, setShowConditionStyling] = useState(true);
+  const [aliasMatches, setAliasMatches] = useState([]);
   const CACHE_KEYS = {
     items: "inventory_items_v1",
     warehouses: "inventory_warehouses_v1",
     locations: "inventory_locations_v1",
   };
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [prevItems, setPrevItems] = useState([]);
 
   function readCache(key) {
     if (typeof window === "undefined") return null;
@@ -52,9 +62,6 @@ export default function InventoryPage() {
 
   // Hydrate from cache immediately for snappier loads
   useEffect(() => {
-    const cachedItems = readCache(CACHE_KEYS.items);
-    if (cachedItems?.data) setItems(cachedItems.data);
-
     const cachedWarehouses = readCache(CACHE_KEYS.warehouses);
     if (cachedWarehouses?.data) setWarehouses(cachedWarehouses.data);
 
@@ -62,6 +69,14 @@ export default function InventoryPage() {
     if (cachedLocations?.zones) setZoneMap(cachedLocations.zones);
     if (cachedLocations?.bays) setBayMap(cachedLocations.bays);
     if (cachedLocations?.shelfs) setShelfMap(cachedLocations.shelfs);
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const ua = navigator.userAgent || "";
+    const touchMac = /Macintosh/.test(ua) && typeof document !== "undefined" && "ontouchend" in document;
+    const ipadDetected = /iPad/.test(ua) || touchMac;
+    setIsIpad(ipadDetected);
   }, []);
 
   useEffect(() => {
@@ -79,34 +94,66 @@ export default function InventoryPage() {
   }, []);
 
   useEffect(() => {
+    const abort = new AbortController();
+    let cancelled = false;
+    setLoadingItems(true);
+    setItems([]);
     (async () => {
-      let query = sb.from("inventory_union").select("*");
-      if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
-      // Order newest-first so the 500-row cap never hides recently added items
-      const { data: baseItems } = await query
-        .order("created_at", { ascending: false, nullsFirst: false })
-        .limit(1000);
-      const safeItems = baseItems || [];
+      try {
+        let query = sb
+          .from("inventory_union")
+          .select("uid,name,brand,model,photo_url,classification,condition,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
+        if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
+        const { data: baseItems, error: invErr } = await query
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
+          .abortSignal(abort.signal);
+        if (invErr) throw invErr;
+        const safeItems = baseItems || [];
 
-      let metalQuery = sb.from("metal_diamonds").select("*");
-      if (warehouse?.value) metalQuery = metalQuery.eq("warehouse_id", warehouse.value);
-      const { data: metalRaw } = await metalQuery
-        .order("created_at", { ascending: false, nullsFirst: false })
-        .limit(500);
-      const seen = new Set(safeItems.map((i) => i.uid));
-      const normalizedMetal = (metalRaw || [])
-        .filter((m) => m?.uid && !seen.has(m.uid))
-        .map((m) => ({
-          ...m,
-          source_table: m.source_table || "metal_diamonds",
-          classification: m.classification || "METAL_DIAMOND",
-        }));
+        let metalQuery = sb
+          .from("metal_diamonds")
+          .select("uid,name,brand,model,photo_url,classification,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
+        if (warehouse?.value) metalQuery = metalQuery.eq("warehouse_id", warehouse.value);
+        const { data: metalRaw, error: metalErr } = await metalQuery
+          .order("created_at", { ascending: false, nullsFirst: false })
+          .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
+          .abortSignal(abort.signal);
+        if (metalErr) throw metalErr;
 
-      const merged = [...safeItems, ...normalizedMetal];
-      setItems(merged);
-      writeCache(CACHE_KEYS.items, { data: merged, ts: Date.now(), warehouse: warehouse?.value || null });
+        const seen = new Set(safeItems.map((i) => i.uid));
+        const normalizedMetal = (metalRaw || [])
+          .filter((m) => m?.uid && !seen.has(m.uid))
+          .map((m) => ({
+            ...m,
+            source_table: m.source_table || "metal_diamonds",
+            classification: m.classification || "METAL_DIAMOND",
+          }));
+
+        const merged = [...safeItems, ...normalizedMetal];
+        if (!cancelled) {
+          setItems(merged);
+          setPrevItems(merged);
+        }
+      } catch (err) {
+        if (!abort.signal.aborted) {
+          console.error("[inventory] fetch failed", err?.message || err);
+          if (!cancelled) {
+            if (prevItems.length) {
+              setItems(prevItems);
+            }
+            toast.error("Failed to load items. Showing previous list.");
+          }
+        }
+      } finally {
+        if (!cancelled) setLoadingItems(false);
+      }
     })();
-  }, [warehouse]);
+    return () => {
+      cancelled = true;
+      abort.abort("inventory-page-change");
+    };
+  }, [warehouse, page]);
 
   // Load zones/bays/shelfs maps for display labels
   useEffect(() => {
@@ -145,23 +192,58 @@ export default function InventoryPage() {
 
   useEffect(() => {
     let isActive = true;
+    const controller = new AbortController();
     if (!q?.trim()) {
       setGroupRows([]);
+      setAliasMatches([]);
       return;
     }
     const t = setTimeout(async () => {
       try {
-        const { data, error } = await sb.rpc("find_group_items", { search_text: q });
+        const { data, error } = await sb.rpc("find_group_items", { search_text: q }, { signal: controller.signal });
         if (error) throw error;
         if (!isActive) return;
         setGroupRows(data || []);
       } catch (err) {
+        if (controller.signal.aborted) return;
         console.error("[inventory] group search failed", err?.message || err);
         if (isActive) setGroupRows([]);
       }
     }, 200);
     return () => {
       isActive = false;
+      controller.abort("group-search-cancel");
+      clearTimeout(t);
+    };
+  }, [q, sb]);
+
+  useEffect(() => {
+    let active = true;
+    if (!q?.trim()) {
+      setAliasMatches([]);
+      return;
+    }
+    const controller = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const { data, error } = await sb
+          .from("item_pseudonyms")
+          .select("item_uid")
+          .ilike("alias", `%${q}%`)
+          .limit(200);
+        if (error) throw error;
+        if (!active) return;
+        const uids = Array.from(new Set((data || []).map((r) => r.item_uid).filter(Boolean)));
+        setAliasMatches(uids);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        console.warn("[inventory] pseudonym search failed", err?.message || err);
+        if (active) setAliasMatches([]);
+      }
+    }, 200);
+    return () => {
+      active = false;
+      controller.abort("alias-search-cancel");
       clearTimeout(t);
     };
   }, [q, sb]);
@@ -179,6 +261,7 @@ export default function InventoryPage() {
   }, [groupRows]);
 
   const filtered = useMemo(() => {
+    const aliasMatchesSet = new Set(aliasMatches);
     const lower = q?.toLowerCase() || "";
     const base = items.filter((i) => {
       const hay = (
@@ -188,9 +271,11 @@ export default function InventoryPage() {
         " " +
         (i.brand || "") +
         " " +
-        (i.model || "")
+        (i.model || "") +
+        " " +
+        (i.notes || "")
       ).toLowerCase();
-      if (q && !hay.includes(lower)) return false;
+      if (q && !hay.includes(lower) && !aliasMatchesSet.has(i.uid)) return false;
       if (brand?.value && (i.brand || "") !== brand.value) return false;
       if (classification?.value && (i.classification || "") !== classification.value) return false;
       if (status?.value && (i.status || "") !== status.value) return false;
@@ -215,11 +300,40 @@ export default function InventoryPage() {
       }
     }
     return Array.from(ordered.values());
-  }, [items, brand, classification, status, q, groupRows, groupMetaByUid, itemsByUid]);
+  }, [items, brand, classification, status, q, groupRows, groupMetaByUid, itemsByUid, aliasMatches]);
 
   // Live statuses for filtered items
   const uids = useMemo(() => filtered.map((i) => i.uid), [filtered]);
   const { liveMap } = useLiveStatuses(uids);
+  const filterFields = (
+    <>
+      <Input
+        placeholder="Search UID, name, brand, model…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      <Select
+        items={warehouses}
+        triggerLabel={warehouse?.label || "All Warehouses"}
+        onSelect={setWarehouse}
+      />
+      <Select
+        items={brands}
+        triggerLabel={brand?.label || "All Brands"}
+        onSelect={setBrand}
+      />
+      <Select
+        items={classifications}
+        triggerLabel={classification?.label || "All Classifications"}
+        onSelect={setClassification}
+      />
+      <Select
+        items={statuses}
+        triggerLabel={status?.label || "All Statuses"}
+        onSelect={setStatus}
+      />
+    </>
+  );
 
   return (
     <div className="space-y-4">
@@ -239,50 +353,84 @@ export default function InventoryPage() {
         >
           List
         </Button>
+        <Button
+          variant={showConditionStyling ? "default" : "outline"}
+          size="sm"
+          onClick={() => setShowConditionStyling((v) => !v)}
+        >
+          {showConditionStyling ? "Condition On" : "Condition Off"}
+        </Button>
         </div>
-        <div className="flex items-center gap-2 w-full justify-end">
-        <div className="flex gap-2 items-flex w-full max-w-6xl justify-end">
-          <Input
-            placeholder="Search UID, name, brand, model…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <Select
-            items={warehouses}
-            triggerLabel={warehouse?.label || "All Warehouses"}
-            onSelect={setWarehouse}
-          />
-          <Select
-            items={brands}
-            triggerLabel={brand?.label || "All Brands"}
-            onSelect={setBrand}
-          />
-          <Select
-            items={classifications}
-            triggerLabel={classification?.label || "All Classifications"}
-            onSelect={setClassification}
-          />
-          <Select
-            items={statuses}
-            triggerLabel={status?.label || "All Statuses"}
-            onSelect={setStatus}
-          />
-        </div>
-        <Link href="/inventory/new">
-          <Button>New Item</Button>
-        </Link>
-        </div>
+        {isIpad ? (
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setFiltersOpen(true)}>
+              Filters
+            </Button>
+            <Link href="/inventory/new">
+              <Button>New Item</Button>
+            </Link>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 w-full justify-end">
+            <div className="flex gap-2 items-flex w-full max-w-6xl justify-end">
+              {filterFields}
+            </div>
+            <Link href="/inventory/new">
+              <Button>New Item</Button>
+            </Link>
+          </div>
+        )}
       </div>
+      <div className="flex justify-end items-center gap-2 text-sm">
+        <Button size="sm" variant="outline" onClick={() => setPage((p) => Math.max(1, p - 1))}>
+          Prev Page
+        </Button>
+        <span>Page {page}</span>
+        <Button size="sm" variant="outline" onClick={() => setPage((p) => p + 1)}>
+          Next Page
+        </Button>
+      </div>
+
+      {isIpad && filtersOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setFiltersOpen(false)} />
+          <div className="relative z-10 w-full max-w-xl bg-white dark:bg-neutral-900 border rounded-xl shadow-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg font-semibold">Filters</div>
+              <Button variant="outline" onClick={() => setFiltersOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <div className="flex flex-col gap-3">{filterFields}</div>
+          </div>
+        </div>
+      )}
       
 
       <Card>
         <CardContent>
+          {loadingItems && items.length === 0 ? (
+            <div className="text-sm text-neutral-500">Loading items…</div>
+          ) : null}
           {view === "grid" && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {filtered.map((i) => (
+            {filtered.map((i) => {
+              const meta = getConditionMeta(i.condition);
+              const needsRepair = showConditionStyling && meta?.value === "broken";
+              const needsMaintenance = showConditionStyling && meta?.value === "needs_service";
+              const isGood = showConditionStyling && meta?.value === "good";
+              const key = i.id ? `${i.source_table || "unknown"}:${i.id}` : `uid:${i.uid}`;
+              const cardClass = needsRepair
+                ? "border-red-200 bg-red-50 dark:bg-red-900/30 dark:border-red-600"
+                : needsMaintenance
+                  ? "border-amber-200 bg-amber-50 dark:bg-amber-900/30 dark:border-amber-500"
+                  : isGood
+                    ? "border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-600"
+                : "bg-white dark:bg-neutral-900 dark:border-neutral-800";
+              return (
               <div
-                key={`${i.source_table}:${i.id}`}
-                className="p-3 rounded-xl border hover:shadow-sm bg-white dark:bg-neutral-900 dark:border-neutral-800 grid grid-cols-2 gap-3 "
+                key={key}
+                className={`p-3 rounded-xl border hover:shadow-sm grid grid-cols-2 gap-3 ${cardClass}`}
               >
                 {/* image row */}
                 <div className="grid grid-cols-1 gap-2 mb-3">
@@ -292,7 +440,6 @@ export default function InventoryPage() {
                         src={i.photo_url}
                         alt={`${i.name} photo`}
                         className="h-full w-full object-cover"
-                        loading="lazy"
                       />
                     ) : (
                       <div className="h-full w-full grid place-items-center text-xs text-neutral-400">
@@ -311,12 +458,22 @@ export default function InventoryPage() {
                       Group: {i._groupMeta.group_name}
                     </span>
                   ) : null}
+                  {needsRepair ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                      Needs Repair
+                    </span>
+                  ) : needsMaintenance ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                      Needs Maintenance
+                    </span>
+                  ) : isGood ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+                      Good
+                    </span>
+                  ) : null}
                 </div>
                 <div className="font-semibold">{i.name}</div>
                 <div className="text-sm">UID: {i.uid}</div>
-                <div className="text-sm">
-                  Loc: {i.location_last_seen || "—"}
-                </div>
                 <div className="text-sm">
                   {(() => {
                     const parts = [];
@@ -366,7 +523,8 @@ export default function InventoryPage() {
                 </div>
               </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           )}
           {view === "list" && (
@@ -386,7 +544,17 @@ export default function InventoryPage() {
                 </thead>
                 <tbody>
                   {filtered.map((i) => (
-                    <tr key={`${i.source_table}:${i.id}`} className="border-b last:border-0 dark:border-neutral-800">
+                    <tr
+                      key={i.id ? `${i.source_table || "unknown"}:${i.id}` : `uid:${i.uid}`}
+                      className={`border-b last:border-0 dark:border-neutral-800 ${(() => {
+                        if (!showConditionStyling) return "";
+                        const meta = getConditionMeta(i.condition);
+                        if (meta?.value === "broken") return "bg-red-50 dark:bg-red-900/30";
+                        if (meta?.value === "needs_service") return "bg-amber-50 dark:bg-amber-900/30";
+                        if (meta?.value === "good") return "bg-green-50 dark:bg-green-900/20";
+                        return "";
+                      })()}`}
+                    >
                       <td className="py-2 pr-3">
                         <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-100 border">
                           {i.photo_url ? (
@@ -396,7 +564,28 @@ export default function InventoryPage() {
                           )}
                         </div>
                       </td>
-                      <td className="py-2 pr-3 font-medium">{i.name}</td>
+                      <td className="py-2 pr-3 font-medium">
+                        <div className="flex items-center gap-2">
+                          <span>{i.name}</span>
+                          {(() => {
+                            const meta = getConditionMeta(i.condition);
+                            if (!showConditionStyling) return null;
+                            return meta?.value === "broken" ? (
+                              <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-700">
+                                Needs Repair
+                              </span>
+                            ) : meta?.value === "needs_service" ? (
+                              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                                Needs Maintenance
+                              </span>
+                            ) : meta?.value === "good" ? (
+                              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                                Good
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
+                      </td>
                       <td className="py-2 pr-3">
                         <div className="flex flex-col gap-1">
                           <span>{i.classification}</span>

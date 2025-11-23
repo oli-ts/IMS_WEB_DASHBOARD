@@ -31,26 +31,50 @@ export async function POST(req) {
     // Pull current totals for these UIDs
     const uids = deduped.map(d => d.item_uid);
     
-    // Business rule: items with quantity_total > 1 must not be on more than one ACTIVE manifest
-    // 1) Load quantities for these UIDs
+    // Availability check for multi-qty items: allow allocations up to total quantity across manifests
     const { data: qtyRows, error: qtyErr } = await sb
       .from("inventory_union")
       .select("uid, quantity_total")
       .in("uid", uids);
     if (qtyErr) return j(500, { error: "Fetch item quantities failed", message: qtyErr.message });
-    const gt1Uids = (qtyRows || []).filter(r => Number(r.quantity_total) > 1).map(r => r.uid);
-    if (gt1Uids.length) {
-      // 2) Check active allocations elsewhere for these items
-      const { data: conflicts, error: cfErr } = await sb
+
+    const totalByUid = Object.fromEntries((qtyRows || []).map((r) => [r.uid, Number(r.quantity_total || 0)]));
+
+    const multiUids = (qtyRows || []).filter((r) => Number(r.quantity_total) > 1).map((r) => r.uid);
+    if (multiUids.length) {
+      const { data: allocations, error: cfErr } = await sb
         .from("item_active_allocations")
         .select("item_uid, manifest_id, van_id, job_id, qty_on_van")
-        .in("item_uid", gt1Uids)
+        .in("item_uid", multiUids)
         .neq("manifest_id", manifestId);
       if (cfErr) return j(500, { error: "Active allocation check failed", message: cfErr.message });
-      if ((conflicts || []).length) {
+
+      const allocatedByUid = {};
+      for (const row of allocations || []) {
+        const q = Number(row.qty_on_van ?? 1) || 1;
+        allocatedByUid[row.item_uid] = (allocatedByUid[row.item_uid] || 0) + q;
+      }
+
+      const insufficient = [];
+      for (const { item_uid, qty } of deduped) {
+        if (!multiUids.includes(item_uid)) continue;
+        const total = Number(totalByUid[item_uid] || 0);
+        const allocatedElsewhere = Number(allocatedByUid[item_uid] || 0);
+        const requested = Number(qty || 0);
+        if (requested + allocatedElsewhere > total) {
+          insufficient.push({
+            item_uid,
+            total,
+            allocatedElsewhere,
+            requested,
+            available: Math.max(total - allocatedElsewhere, 0),
+          });
+        }
+      }
+      if (insufficient.length) {
         return j(409, {
-          error: "Item(s) with quantity > 1 already allocated on another active manifest",
-          conflicts
+          error: "Insufficient available quantity (already allocated on other active manifests)",
+          insufficient,
         });
       }
     }

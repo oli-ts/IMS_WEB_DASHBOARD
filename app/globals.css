@@ -32,3 +32,19 @@ body {
   color: var(--foreground);
   font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
 }
+
+/* Subtle scrollbars */
+.scrollbar-ghost {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.5) transparent;
+}
+.scrollbar-ghost::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-ghost::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-ghost::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 120, 0.4);
+  border-radius: 9999px;
+}

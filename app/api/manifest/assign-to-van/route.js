@@ -55,11 +55,31 @@ export async function POST(req) {
 
       if (cfErr) return j(500, { error: "Conflict check failed", message: cfErr.message });
 
-      if ((conflicts || []).length) {
-        // Block activation and report conflicts
+      // Pull quantities to allow multi-qty items to be shared up to total
+      const { data: qtyRows, error: qtyErr } = await sb
+        .from("inventory_union")
+        .select("uid, quantity_total")
+        .in("uid", singletonUids);
+      if (qtyErr) return j(500, { error: "Quantity lookup failed", message: qtyErr.message });
+      const qtyByUid = Object.fromEntries((qtyRows || []).map((r) => [r.uid, Number(r.quantity_total || 0)]));
+
+      const conflictByUid = {};
+      for (const c of conflicts || []) {
+        const q = Number(c.qty_on_van ?? 1) || 1;
+        conflictByUid[c.item_uid] = (conflictByUid[c.item_uid] || 0) + q;
+      }
+
+      const hardConflicts = (conflicts || []).filter((c) => {
+        const total = qtyByUid[c.item_uid] || 0;
+        const allocatedElsewhere = conflictByUid[c.item_uid] || 0;
+        return total <= 0 || allocatedElsewhere >= total;
+      });
+
+      if (hardConflicts.length) {
+        // Block activation and report only truly exhausted items
         return j(409, {
           error: "Singleton item(s) already active on another manifest",
-          conflicts
+          conflicts: hardConflicts
         });
       }
     }

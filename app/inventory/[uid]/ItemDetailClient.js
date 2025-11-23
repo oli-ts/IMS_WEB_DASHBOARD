@@ -14,7 +14,7 @@ import { CONDITION_OPTIONS, CONDITION_DB_CONST, getConditionOption, getCondition
 import { LiveStatusBadge } from "@/components/live-status-badge";
 import { QtyBadge } from "@/components/qty-badge";
 
-export default function ItemDetailClient({ uid }) {
+export default function ItemDetailClient({ uid, openEdit = false }) {
   const sb = supabaseBrowser();
 
   // core item + derived live status
@@ -67,6 +67,12 @@ export default function ItemDetailClient({ uid }) {
   const [currentRole, setCurrentRole] = useState(null);
   const [deletePending, setDeletePending] = useState(false);
   const [zoneName, setZoneName] = useState(null);
+  const [bayName, setBayName] = useState(null);
+  const [shelfName, setShelfName] = useState(null);
+  const [editAutoOpened, setEditAutoOpened] = useState(false);
+  const [aliases, setAliases] = useState([]);
+  const [aliasInput, setAliasInput] = useState("");
+  const [aliasLoading, setAliasLoading] = useState(false);
 
   // classification options & constants
   const CLASS_OPTIONS = [
@@ -354,6 +360,56 @@ export default function ItemDetailClient({ uid }) {
   }, [item?.zone_id, sb]);
 
   useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!item?.bay_id) {
+        if (active) setBayName(null);
+        return;
+      }
+      try {
+        const { data, error } = await sb
+          .from("bays")
+          .select("label")
+          .eq("id", item.bay_id)
+          .maybeSingle();
+        if (!active) return;
+        if (error) throw error;
+        setBayName(data?.label || null);
+      } catch (err) {
+        if (active) setBayName(null);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [item?.bay_id, sb]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!item?.shelf_id) {
+        if (active) setShelfName(null);
+        return;
+      }
+      try {
+        const { data, error } = await sb
+          .from("shelfs")
+          .select("label")
+          .eq("id", item.shelf_id)
+          .maybeSingle();
+        if (!active) return;
+        if (error) throw error;
+        setShelfName(data?.label || null);
+      } catch (err) {
+        if (active) setShelfName(null);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [item?.shelf_id, sb]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -383,6 +439,39 @@ export default function ItemDetailClient({ uid }) {
     };
   }, [sb]);
 
+  useEffect(() => {
+    let active = true;
+    if (!uid) return;
+    (async () => {
+      try {
+        setAliasLoading(true);
+        const { data, error } = await sb
+          .from("item_pseudonyms")
+          .select("id,alias,created_at")
+          .eq("item_uid", uid)
+          .order("alias");
+        if (error) throw error;
+        if (active) setAliases(data || []);
+      } catch (err) {
+        console.warn("[item detail] load aliases failed", err?.message || err);
+        if (active) setAliases([]);
+      } finally {
+        if (active) setAliasLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [uid, sb]);
+
+  useEffect(() => {
+    if (!openEdit || editAutoOpened) return;
+    if (item) {
+      setEditOpen(true);
+      setEditAutoOpened(true);
+    }
+  }, [openEdit, item, editAutoOpened]);
+
   // qty breakdown (derived)
   const qty = useMemo(() => {
     if (!item) return { total: null, available: null, reserved: null, unit: "pcs" };
@@ -411,6 +500,40 @@ export default function ItemDetailClient({ uid }) {
   const isStoreRoomZone = useMemo(() => {
     return (zoneName || "").trim().toLowerCase() === "storeroom";
   }, [zoneName]);
+  async function addAlias() {
+    const alias = aliasInput.trim();
+    if (!alias) return toast.error("Alias required");
+    try {
+      const { data, error } = await sb
+        .from("item_pseudonyms")
+        .insert({ item_uid: uid, alias })
+        .select()
+        .single();
+      if (error) throw error;
+      setAliases((prev) => [...prev, data]);
+      setAliasInput("");
+      toast.success("Alias added");
+    } catch (err) {
+      toast.error(err?.message || "Failed to add alias");
+    }
+  }
+
+  async function removeAlias(id) {
+    try {
+      const { error } = await sb.from("item_pseudonyms").delete().eq("id", id);
+      if (error) throw error;
+      setAliases((prev) => prev.filter((a) => a.id !== id));
+    } catch (err) {
+      toast.error(err?.message || "Failed to remove alias");
+    }
+  }
+  const locationDisplay = useMemo(() => {
+    const parts = [];
+    if (zoneName || item?.zone_id) parts.push(`Zone ${zoneName || item?.zone_id}`);
+    if (bayName || item?.bay_id) parts.push(`Bay ${bayName || item?.bay_id}`);
+    if (shelfName || item?.shelf_id) parts.push(`Shelf ${shelfName || item?.shelf_id}`);
+    return parts.length ? parts.join(" · ") : null;
+  }, [zoneName, bayName, shelfName, item?.zone_id, item?.bay_id, item?.shelf_id]);
 
   return (
     <div className="space-y-6">
@@ -605,6 +728,7 @@ export default function ItemDetailClient({ uid }) {
                     label="Condition"
                     value={item?.condition ? <ConditionBadge condition={item.condition} /> : "—"}
                   />
+                  <Row label="Zone / Bay / Shelf" value={locationDisplay || "—"} />
                   <Row label="Brand / Model" value={[item.brand, item.model].filter(Boolean).join(" ") || "—"} />
                   <Row label="Serial" value={item.serial_number || "—"} />
                   {/* Live and DB-reported status */}
@@ -722,6 +846,38 @@ export default function ItemDetailClient({ uid }) {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>Pseudonyms</CardHeader>
+        <CardContent>
+          {aliasLoading ? (
+            <div className="text-sm text-neutral-500">Loading aliases…</div>
+          ) : (
+            <div className="space-y-2">
+              {aliases.length === 0 ? (
+                <div className="text-sm text-neutral-500">No aliases yet.</div>
+              ) : (
+                aliases.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between rounded border px-3 py-2 dark:border-neutral-800">
+                    <span className="text-sm">{a.alias}</span>
+                    <Button size="sm" variant="outline" onClick={() => removeAlias(a.id)}>
+                      Remove
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <Input
+              placeholder="Add alias"
+              value={aliasInput}
+              onChange={(e) => setAliasInput(e.target.value)}
+            />
+            <Button onClick={addAlias}>Add</Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Accessories list for parent tools */}
       {accessories.length > 0 && (

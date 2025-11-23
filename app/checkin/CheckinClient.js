@@ -29,6 +29,11 @@ export default function CheckinClient() {
   const [reportTypes, setReportTypes] = useState([]); // ["missing","damaged","dirty",...]
   const [reportNotes, setReportNotes] = useState("");
   const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [kitList, setKitList] = useState([]);
+  const [kitSelected, setKitSelected] = useState(null);
+  const [kitPreview, setKitPreview] = useState([]);
+  const [kitPreviewLoading, setKitPreviewLoading] = useState(false);
+  const [kitModalOpen, setKitModalOpen] = useState(false);
 
   const REPORT_OPTIONS = [
     { value: "missing", label: "Missing" },
@@ -60,8 +65,15 @@ export default function CheckinClient() {
         .order("code");
 
       setStaging((bays || []).map((b) => ({ value: b.label, label: b.label })));
+
+      const { data: kits } = await sb.from("kit_details").select("id,name").order("name");
+      const kitOpts = (kits || []).map((k) => ({ value: k.id, label: k.name }));
+      setKitList(kitOpts);
+      if (kitOpts.length && !kitSelected) {
+        setKitSelected(kitOpts[0]);
+      }
     })();
-  }, [sb]);
+  }, [sb, kitSelected]);
 
   // when manifest changes → load header + derived "on van" rows
   useEffect(() => {
@@ -147,6 +159,48 @@ export default function CheckinClient() {
       );
     })();
   }, [manifest, sb]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!kitModalOpen || !kitSelected?.value) {
+        if (active) setKitPreview([]);
+        return;
+      }
+      setKitPreviewLoading(true);
+      try {
+        const { data, error } = await sb
+          .from("kit_items")
+          .select("item_uid,quantity")
+          .eq("kit_id", kitSelected.value);
+        if (error) throw error;
+        const uids = [...new Set((data || []).map((r) => r.item_uid))];
+        let metaMap = {};
+        if (uids.length) {
+          const { data: inv } = await sb
+            .from("inventory_union")
+            .select("uid,name,photo_url")
+            .in("uid", uids);
+          metaMap = Object.fromEntries((inv || []).map((i) => [i.uid, i]));
+        }
+        const rows = (data || []).map((row) => ({
+          uid: row.item_uid,
+          qty: row.quantity || 1,
+          name: metaMap[row.item_uid]?.name || row.item_uid,
+          photo_url: metaMap[row.item_uid]?.photo_url || null,
+        }));
+        if (active) setKitPreview(rows);
+      } catch (err) {
+        console.error("[checkin] kit preview failed", err);
+        if (active) setKitPreview([]);
+      } finally {
+        if (active) setKitPreviewLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [kitModalOpen, kitSelected, sb]);
 
   const filtered = useMemo(() => {
     return rows.filter((r) => {
@@ -247,7 +301,18 @@ export default function CheckinClient() {
 
   return (
     <div className="space-y-6">
-      <div className="text-2xl font-semibold">Check-In Manifests</div>
+      <div className="flex items-center justify-between">
+        <div className="text-2xl font-semibold">Check-In Manifests</div>
+        <Button
+          variant="outline"
+          onClick={() => {
+            if (!kitSelected && kitList[0]) setKitSelected(kitList[0]);
+            setKitModalOpen(true);
+          }}
+        >
+          Confirm Kit Contents
+        </Button>
+      </div>
 
       <Card>
         <CardHeader>Pick manifest & staging bay</CardHeader>
@@ -354,6 +419,57 @@ export default function CheckinClient() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Kit contents modal */}
+      {kitModalOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setKitModalOpen(false)} />
+          <div className="relative z-10 w-full max-w-3xl bg-white dark:bg-neutral-900 border rounded-xl shadow-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg font-semibold">Kit Contents</div>
+              <div className="flex items-center gap-2">
+                <Select
+                  items={kitList}
+                  triggerLabel={kitSelected?.label || "Select kit"}
+                  onSelect={setKitSelected}
+                />
+                <Button variant="outline" onClick={() => setKitModalOpen(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+            {kitPreviewLoading ? (
+              <div className="text-sm text-neutral-500">Loading kit…</div>
+            ) : kitPreview.length === 0 ? (
+              <div className="text-sm text-neutral-500">No items found for this kit.</div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-3">
+                {kitPreview.map((item) => (
+                  <div
+                    key={item.uid}
+                    className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center gap-3"
+                  >
+                    <div className="h-14 w-14 rounded-lg overflow-hidden bg-neutral-100 border">
+                      {item.photo_url ? (
+                        <img src={item.photo_url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">
+                          No image
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-medium">{item.name}</div>
+                      <div className="text-xs text-neutral-500">{item.uid}</div>
+                      <div className="text-xs text-neutral-500">Qty: {item.qty}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Report Modal */}
       {reportOpen && (

@@ -26,6 +26,11 @@ export default function CheckoutClient() {
   const [rows, setRows] = useState([]); // from manifest_item_totals
   const [itemInfo, setItemInfo] = useState({}); // uid -> {name, photo_url, classification}
   const [q, setQ] = useState("");
+  const [kitList, setKitList] = useState([]);
+  const [kitSelected, setKitSelected] = useState(null);
+  const [kitPreview, setKitPreview] = useState([]);
+  const [kitPreviewLoading, setKitPreviewLoading] = useState(false);
+  const [kitModalOpen, setKitModalOpen] = useState(false);
 
   // Load manifests + staging bays
   useEffect(() => {
@@ -50,8 +55,13 @@ export default function CheckoutClient() {
         .order("code");
 
       setBays((bayRows || []).map((b) => ({ value: b.label, label: b.label })));
+
+      const { data: kits } = await sb.from("kit_details").select("id,name").order("name");
+      const kitOpts = (kits || []).map((k) => ({ value: k.id, label: k.name }));
+      setKitList(kitOpts);
+      if (kitOpts.length && !kitSelected) setKitSelected(kitOpts[0]);
     })();
-  }, [sb]);
+  }, [sb, kitSelected]);
 
   // When manifest changes → load header + derived totals
   useEffect(() => {
@@ -145,6 +155,48 @@ export default function CheckoutClient() {
     })();
   }, [manifest, sb]);
 
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!kitModalOpen || !kitSelected?.value) {
+        if (active) setKitPreview([]);
+        return;
+      }
+      setKitPreviewLoading(true);
+      try {
+        const { data, error } = await sb
+          .from("kit_items")
+          .select("item_uid,quantity")
+          .eq("kit_id", kitSelected.value);
+        if (error) throw error;
+        const uids = [...new Set((data || []).map((r) => r.item_uid))];
+        let metaMap = {};
+        if (uids.length) {
+          const { data: inv } = await sb
+            .from("inventory_union")
+            .select("uid,name,photo_url")
+            .in("uid", uids);
+          metaMap = Object.fromEntries((inv || []).map((i) => [i.uid, i]));
+        }
+        const rows = (data || []).map((row) => ({
+          uid: row.item_uid,
+          qty: row.quantity || 1,
+          name: metaMap[row.item_uid]?.name || row.item_uid,
+          photo_url: metaMap[row.item_uid]?.photo_url || null,
+        }));
+        if (active) setKitPreview(rows);
+      } catch (err) {
+        console.error("[checkout] kit preview failed", err);
+        if (active) setKitPreview([]);
+      } finally {
+        if (active) setKitPreviewLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [kitModalOpen, kitSelected, sb]);
+
   const filtered = useMemo(() => {
     return rows.filter((r) => {
       const remaining = Math.max(0, Number(r.qty_required || 0) - Number(r.qty_checked_out || 0));
@@ -188,6 +240,16 @@ export default function CheckoutClient() {
     return ordered;
   }, [filtered, itemInfo]);
 
+  const duplicates = useMemo(() => {
+    const map = {};
+    for (const r of rows || []) {
+      if ((r.qty_required || 0) > 1) {
+        map[r.item_uid] = true;
+      }
+    }
+    return map;
+  }, [rows]);
+
   async function submit() {
     try {
       if (!manifest?.value) return toast.error("Pick a manifest");
@@ -224,8 +286,32 @@ export default function CheckoutClient() {
 
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
+        let desc = j.details || j.message || (j.reasons ? j.reasons.join(", ") : undefined);
+        if (j.insufficient?.length) {
+          const lines = j.insufficient
+            .slice(0, 5)
+            .map((r) => {
+              const info = itemInfo[r.item_uid];
+              const name = info?.name ? `${info.name} (${r.item_uid})` : r.item_uid;
+              return `${name}: requested ${r.requested}, available ${r.available}`;
+            });
+          const more = j.insufficient.length > 5 ? ` (+${j.insufficient.length - 5} more)` : "";
+          desc = `${desc || "Some items exceed available quantity"} — ${lines.join("; ")}${more}`;
+        }
+        if (j.conflicts?.length && !desc) {
+          const lines = j.conflicts
+            .slice(0, 5)
+            .map((c) => {
+              const info = itemInfo[c.item_uid];
+              const name = info?.name ? `${info.name} (${c.item_uid})` : c.item_uid;
+              const extra = typeof c.available === "number" ? ` (available: ${c.available})` : "";
+              return `${name}${extra}`;
+            });
+          const more = j.conflicts.length > 5 ? ` (+${j.conflicts.length - 5} more)` : "";
+          desc = `Already active elsewhere: ${lines.join(", ")}${more}`;
+        }
         return toast.error(j.error || "Checkout failed", {
-          description: j.details || j.message || (j.reasons ? j.reasons.join(", ") : undefined),
+          description: desc,
         });
       }
 
@@ -252,7 +338,17 @@ export default function CheckoutClient() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        return toast.error(j.error || "Assign failed");
+        let desc = j.message || "";
+        if (j.conflicts?.length) {
+          const lines = j.conflicts.slice(0, 5).map((c) => {
+            const info = itemInfo[c.item_uid];
+            const name = info?.name ? `${info.name} (${c.item_uid})` : c.item_uid;
+            return name;
+          });
+          const more = j.conflicts.length > 5 ? ` (+${j.conflicts.length - 5} more)` : "";
+          desc = `Items already active elsewhere: ${lines.join(", ")}${more}`;
+        }
+        return toast.error(j.error || "Assign failed", { description: desc || undefined });
       }
       toast.success("Assigned to van & activated");
       setIsAssigned(true);
@@ -273,7 +369,18 @@ export default function CheckoutClient() {
 
   return (
     <div className="space-y-6">
-      <div className="text-2xl font-semibold">Check-Out Manifests</div>
+      <div className="flex items-center justify-between">
+        <div className="text-2xl font-semibold">Check-Out Manifests</div>
+        <Button
+          variant="outline"
+          onClick={() => {
+            if (!kitSelected && kitList[0]) setKitSelected(kitList[0]);
+            setKitModalOpen(true);
+          }}
+        >
+          Confirm Kit Contents
+        </Button>
+      </div>
 
       <Card>
         <CardHeader>Pick manifest & staging bay</CardHeader>
@@ -324,11 +431,12 @@ export default function CheckoutClient() {
               const info = itemInfo[r.item_uid];
               const remaining = Math.max(0, Number(r.qty_required || 0) - Number(r.qty_checked_out || 0));
               const isAcc = ((info?.classification || "").toUpperCase() === "ACCESSORY");
+              const isDuplicate = duplicates[r.item_uid];
 
               return (
                 <div
                   key={r.item_uid}
-                  className={`p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 ${r.selected ? "ring-2 ring-black dark:ring-white" : ""} ${isAcc ? "ml-6 border-l-2 pl-3 bg-neutral-50 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700" : ""}`}
+                  className={`p-3 rounded-xl border ${isDuplicate ? "border-blue-300 bg-blue-50 dark:border-blue-500 dark:bg-blue-900/20" : "bg-white dark:bg-neutral-900 dark:border-neutral-800"} ${r.selected ? "ring-2 ring-black dark:ring-white" : ""} ${isAcc ? "ml-6 border-l-2 pl-3 bg-neutral-50 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700" : ""}`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -382,6 +490,57 @@ export default function CheckoutClient() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Kit contents modal */}
+      {kitModalOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setKitModalOpen(false)} />
+          <div className="relative z-10 w-full max-w-3xl bg-white dark:bg-neutral-900 border rounded-xl shadow-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg font-semibold">Kit Contents</div>
+              <div className="flex items-center gap-2">
+                <Select
+                  items={kitList}
+                  triggerLabel={kitSelected?.label || "Select kit"}
+                  onSelect={setKitSelected}
+                />
+                <Button variant="outline" onClick={() => setKitModalOpen(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+            {kitPreviewLoading ? (
+              <div className="text-sm text-neutral-500">Loading kit…</div>
+            ) : kitPreview.length === 0 ? (
+              <div className="text-sm text-neutral-500">No items found for this kit.</div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-3">
+                {kitPreview.map((item) => (
+                  <div
+                    key={item.uid}
+                    className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center gap-3"
+                  >
+                    <div className="h-14 w-14 rounded-lg overflow-hidden bg-neutral-100 border">
+                      {item.photo_url ? (
+                        <img src={item.photo_url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">
+                          No image
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-medium">{item.name}</div>
+                      <div className="text-xs text-neutral-500">{item.uid}</div>
+                      <div className="text-xs text-neutral-500">Qty: {item.qty}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

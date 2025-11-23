@@ -52,6 +52,46 @@ export default function ManifestDetailClient({ manifestId }) {
         .select("uid,name,photo_url,zone_id,bay_id,shelf_id,quantity_total,quantity_available,unit,classification")
         .in("uid", uids);
       metaMap = Object.fromEntries((inv || []).map(r => [r.uid, r]));
+      const missingAfterInv = uids.filter((u) => !metaMap[u]);
+      if (missingAfterInv.length) {
+        const { data: acc } = await sb
+          .from("accessories")
+          .select("uid,name,photo_url,zone_id,bay_id,shelf_id,quantity_total,unit")
+          .in("uid", missingAfterInv);
+        (acc || []).forEach((r) => {
+          metaMap[r.uid] = {
+            uid: r.uid,
+            name: r.name,
+            photo_url: r.photo_url,
+            zone_id: r.zone_id,
+            bay_id: r.bay_id,
+            shelf_id: r.shelf_id,
+            quantity_total: r.quantity_total,
+            unit: r.unit,
+            classification: "ACCESSORY",
+          };
+        });
+        const stillMissing = missingAfterInv.filter((u) => !metaMap[u]);
+        if (stillMissing.length) {
+          const { data: metals } = await sb
+            .from("metal_diamonds")
+            .select("uid,name,photo_url,zone_id,bay_id,shelf_id,quantity_total,unit")
+            .in("uid", stillMissing);
+          (metals || []).forEach((r) => {
+            metaMap[r.uid] = {
+              uid: r.uid,
+              name: r.name,
+              photo_url: r.photo_url,
+              zone_id: r.zone_id,
+              bay_id: r.bay_id,
+              shelf_id: r.shelf_id,
+              quantity_total: r.quantity_total,
+              unit: r.unit,
+              classification: r.classification || "METAL_DIAMOND",
+            };
+          });
+        }
+      }
     }
 
     const [z, b, s] = await Promise.all([
@@ -491,52 +531,6 @@ export default function ManifestDetailClient({ manifestId }) {
   return (
     <div className="space-y-4">
       <div className="text-xl font-semibold">Manifest for: {meta?.jobs?.name || "-"}</div>
-      <div className="flex gap-3">
-        <Stat label="Required" value={totals.req} />
-        <Stat label="Checked Out" value={totals.out} />
-        <Stat label="Checked In" value={totals.in} />
-      </div>
-      <div className="grid gap-2">
-        {items.map((mi) => {
-          const available = typeof mi.available_qty === "number" ? mi.available_qty : null;
-          const total = typeof mi.total_qty === "number" ? mi.total_qty : null;
-          const unit = mi.unit || (available !== null || total !== null ? "pcs" : "");
-          const unitLabel = unit ? ` ${unit}` : "";
-          return (
-            <div
-              key={mi.id}
-              className={`p-3 rounded-xl border flex items-center justify-between ${mi.insufficient ? "border-red-300 bg-red-50 dark:border-red-400 dark:bg-red-500/10" : "bg-white dark:bg-neutral-900 dark:border-neutral-800"}`}
-            >
-              <div className="flex items-center gap-3">
-                <div className={`h-12 w-12 rounded-lg overflow-hidden border ${mi.insufficient ? "border-red-300 bg-red-100/70" : "bg-neutral-100"}`}>
-                  {mi.photo_url ? (
-                    <img src={mi.photo_url} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
-                  )}
-                </div>
-                <div>
-                  <div className="font-medium">{mi.item_name || mi.item_uid}</div>
-                  <div className="text-sm text-neutral-500">Zone: {mi.zone_label || "-"} · Bay: {mi.bay_label || "-"} · Shelf: {mi.shelf_label || "-"}</div>
-                  {(available !== null || total !== null) && (
-                    <div className={`text-xs mt-1 ${mi.insufficient ? "text-red-600" : "text-neutral-500"}`}>
-                      Available: {available !== null ? available : "—"}{unitLabel}{total !== null ? ` / ${total}${unitLabel}` : ""}
-                    </div>
-                  )}
-                  {mi.insufficient && (
-                    <div className="text-xs text-red-600 mt-1">Required {mi.qty_required} exceeds available quantity.</div>
-                  )}
-                </div>
-              </div>
-              <div className="text-sm flex items-center gap-2">
-                <QtyEditor value={mi.qty_required} onChange={(v) => updateQty(mi.id, v)} />
-                <Button size="sm" variant="outline" onClick={() => removeLine(mi.id)}>Remove</Button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
       <div className="space-y-3">
         <div className="font-semibold">Add Items</div>
         <Input className="h-9 max-w-md" placeholder="Search inventory by name or UID" value={q} onChange={e=>setQ(e.target.value)} />
@@ -616,6 +610,55 @@ export default function ManifestDetailClient({ manifestId }) {
           })}
           {q && inv.length === 0 && kitResults.length === 0 && <div className="text-sm text-neutral-500">No matches.</div>}
         </div>
+      </div>
+      <div className="flex gap-3">
+        <Stat label="Required" value={totals.req} />
+        <Stat label="Checked Out" value={totals.out} />
+        <Stat label="Checked In" value={totals.in} />
+      </div>
+      <div className="grid gap-2">
+        {items.map((mi) => {
+          const available = typeof mi.available_qty === "number" ? mi.available_qty : null;
+          const total = typeof mi.total_qty === "number" ? mi.total_qty : null;
+          const unit = mi.unit || (available !== null || total !== null ? "pcs" : "");
+          const unitLabel = unit ? ` ${unit}` : "";
+          const duplicates = dupMap[mi.item_uid] || [];
+          const duplicateClass = duplicates.length
+            ? "border-blue-300 bg-blue-50 dark:border-blue-500 dark:bg-blue-900/20"
+            : "";
+          return (
+            <div
+              key={mi.id}
+              className={`p-3 rounded-xl border flex items-center justify-between ${duplicateClass || (mi.insufficient ? "border-red-300 bg-red-50 dark:border-red-400 dark:bg-red-500/10" : "bg-white dark:bg-neutral-900 dark:border-neutral-800")}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`h-12 w-12 rounded-lg overflow-hidden border ${mi.insufficient ? "border-red-300 bg-red-100/70" : "bg-neutral-100"}`}>
+                  {mi.photo_url ? (
+                    <img src={mi.photo_url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
+                  )}
+                </div>
+                <div>
+                  <div className="font-medium">{mi.item_name || mi.item_uid}</div>
+                  <div className="text-sm text-neutral-500">Zone: {mi.zone_label || "-"} · Bay: {mi.bay_label || "-"} · Shelf: {mi.shelf_label || "-"}</div>
+                  {(available !== null || total !== null) && (
+                    <div className={`text-xs mt-1 ${mi.insufficient ? "text-red-600" : "text-neutral-500"}`}>
+                      Available: {available !== null ? available : "—"}{unitLabel}{total !== null ? ` / ${total}${unitLabel}` : ""}
+                    </div>
+                  )}
+                  {mi.insufficient && (
+                    <div className="text-xs text-red-600 mt-1">Required {mi.qty_required} exceeds available quantity.</div>
+                  )}
+                </div>
+              </div>
+              <div className="text-sm flex items-center gap-2">
+                <QtyEditor value={mi.qty_required} onChange={(v) => updateQty(mi.id, v)} />
+                <Button size="sm" variant="outline" onClick={() => removeLine(mi.id)}>Remove</Button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

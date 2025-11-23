@@ -169,13 +169,47 @@ export default function KitsPage() {
     }
   }
 
+  async function ensureKitItemUid(uidRaw) {
+    const uid = (uidRaw || "").trim().toUpperCase();
+    if (!uid) {
+      toast.error("Invalid UID");
+      return null;
+    }
+    try {
+      const { data, error } = await sb
+        .from("inventory_union")
+        .select("uid")
+        .eq("uid", uid)
+        .maybeSingle();
+      if (error) throw error;
+      if (data?.uid) return uid;
+      const { data: metal } = await sb
+        .from("metal_diamonds")
+        .select("uid")
+        .eq("uid", uid)
+        .maybeSingle();
+      if (metal?.uid) {
+        toast.error("Metal Diamond items can't be added to kits yet.");
+      } else {
+        toast.error("Item not found in main inventory.");
+      }
+      return null;
+    } catch (err) {
+      console.error("Kit add lookup failed", err);
+      toast.error("Failed to verify item. Try again.");
+      return null;
+    }
+  }
+
   async function addItemToKit(uid, quantity = 1) {
     if (!selectedKitId) return;
+    const validUid = await ensureKitItemUid(uid);
+    if (!validUid) return;
     const qty = Math.max(1, Number(quantity) || 1);
     try {
       const payload = {
         kit_id: selectedKitId,
-        item_uid: uid,
+        item_uid: validUid,
         quantity: qty,
       };
       const { data, error } = await sb
@@ -189,7 +223,7 @@ export default function KitsPage() {
       const { data: inv } = await sb
         .from("inventory_union")
         .select("uid,name")
-        .eq("uid", uid)
+        .eq("uid", validUid)
         .maybeSingle();
       if (inv?.uid) {
         setKitItemNames((prev) => ({ ...prev, [inv.uid]: inv.name }));

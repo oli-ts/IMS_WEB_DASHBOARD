@@ -30,6 +30,13 @@ export default function Settings() {
   const [editGroupName, setEditGroupName] = useState("");
   const [editGroupDesc, setEditGroupDesc] = useState("");
   const [savingGroup, setSavingGroup] = useState(false);
+  // Pseudonyms
+  const [aliasSearch, setAliasSearch] = useState("");
+  const [aliasResults, setAliasResults] = useState([]);
+  const [aliasSelected, setAliasSelected] = useState(null);
+  const [aliasList, setAliasList] = useState([]);
+  const [aliasInput, setAliasInput] = useState("");
+  const [aliasLoading, setAliasLoading] = useState(false);
 
   async function loadUsers() {
     try {
@@ -208,6 +215,103 @@ export default function Settings() {
       setMemberMeta({});
     } finally {
       setMemberLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    if (!aliasSearch?.trim()) {
+      setAliasResults([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const term = aliasSearch.trim();
+        const invQuery = sb
+          .from("inventory_union")
+          .select("uid,name,classification,photo_url")
+          .or(`uid.ilike.%${term}%,name.ilike.%${term}%`)
+          .limit(20);
+        const aliasQuery = sb
+          .from("item_pseudonyms")
+          .select("item_uid,alias")
+          .ilike("alias", `%${term}%`)
+          .limit(50);
+        const [invRes, aliasRes] = await Promise.all([invQuery, aliasQuery]);
+        const rows = invRes?.data ? [...invRes.data] : [];
+        if (aliasRes?.data?.length) {
+          const uids = Array.from(new Set(aliasRes.data.map((a) => a.item_uid)));
+          if (uids.length) {
+            const { data: inv2 } = await sb
+              .from("inventory_union")
+              .select("uid,name,classification,photo_url")
+              .in("uid", uids);
+            for (const r of inv2 || []) {
+              if (!rows.find((x) => x.uid === r.uid)) rows.push(r);
+            }
+          }
+        }
+        if (active) setAliasResults(rows || []);
+      } catch (err) {
+        console.warn("[settings] alias search failed", err?.message || err);
+        if (active) setAliasResults([]);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [aliasSearch, sb]);
+
+  async function loadAliasesForSelected(uid) {
+    if (!uid) {
+      setAliasList([]);
+      return;
+    }
+    try {
+      setAliasLoading(true);
+      const { data, error } = await sb
+        .from("item_pseudonyms")
+        .select("id,alias,created_at")
+        .eq("item_uid", uid)
+        .order("alias");
+      if (error) throw error;
+      setAliasList(data || []);
+    } catch (err) {
+      console.warn("[settings] load aliases failed", err?.message || err);
+      setAliasList([]);
+    } finally {
+      setAliasLoading(false);
+    }
+  }
+
+  async function addAlias() {
+    if (!aliasSelected?.uid) return toast.error("Pick an item");
+    const alias = aliasInput.trim();
+    if (!alias) return toast.error("Alias required");
+    try {
+      const { error, data } = await sb
+        .from("item_pseudonyms")
+        .insert({ item_uid: aliasSelected.uid, alias })
+        .select()
+        .single();
+      if (error) throw error;
+      toast.success("Alias added");
+      setAliasInput("");
+      setAliasList((prev) => [...prev, data]);
+    } catch (err) {
+      toast.error(err?.message || "Failed to add alias");
+    }
+  }
+
+  async function removeAlias(id) {
+    if (!id) return;
+    try {
+      const { error } = await sb.from("item_pseudonyms").delete().eq("id", id);
+      if (error) throw error;
+      setAliasList((prev) => prev.filter((a) => a.id !== id));
+    } catch (err) {
+      toast.error(err?.message || "Failed to remove alias");
     }
   }
 
@@ -557,6 +661,79 @@ export default function Settings() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="text-xl font-semibold">Item Pseudonyms</div>
+        <Card>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-[320px_1fr]">
+              <div className="space-y-2">
+                <div className="text-sm text-neutral-500">Search item (UID, name, or existing alias)</div>
+                <Input
+                  placeholder="Search items…"
+                  value={aliasSearch}
+                  onChange={(e) => setAliasSearch(e.target.value)}
+                />
+                <div className="max-h-64 overflow-auto rounded-xl border dark:border-neutral-800 bg-white dark:bg-neutral-900">
+                  {aliasResults.length ? (
+                    aliasResults.map((r) => (
+                      <button
+                        key={r.uid}
+                        type="button"
+                        className={`w-full text-left p-3 border-b last:border-0 dark:border-neutral-800 ${aliasSelected?.uid === r.uid ? "bg-blue-50 dark:bg-blue-900/30" : ""}`}
+                        onClick={() => {
+                          setAliasSelected(r);
+                          loadAliasesForSelected(r.uid);
+                        }}
+                      >
+                        <div className="font-medium">{r.name || r.uid}</div>
+                        <div className="text-xs text-neutral-500">{r.uid}{r.classification ? ` · ${r.classification}` : ""}</div>
+                      </button>
+                    ))
+                  ) : aliasSearch ? (
+                    <div className="p-3 text-sm text-neutral-500">No matches.</div>
+                  ) : (
+                    <div className="p-3 text-sm text-neutral-500">Start typing to search.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm text-neutral-500">Aliases for selected item</div>
+                {aliasSelected ? (
+                  <>
+                    <div className="text-sm font-semibold">{aliasSelected.name || aliasSelected.uid}</div>
+                    {aliasLoading ? (
+                      <div className="text-sm text-neutral-500">Loading aliases…</div>
+                    ) : aliasList.length === 0 ? (
+                      <div className="text-sm text-neutral-500">No aliases yet.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {aliasList.map((a) => (
+                          <div key={a.id} className="flex items-center justify-between rounded border px-3 py-2 dark:border-neutral-800">
+                            <span className="text-sm">{a.alias}</span>
+                            <Button size="sm" variant="outline" onClick={() => removeAlias(a.id)}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="Add alias"
+                        value={aliasInput}
+                        onChange={(e) => setAliasInput(e.target.value)}
+                      />
+                      <Button onClick={addAlias}>Add</Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-neutral-500">Select an item to manage aliases.</div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="space-y-3">

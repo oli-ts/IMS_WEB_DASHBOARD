@@ -68,9 +68,6 @@ export default function NewManifestClient({ initial }) {
     const e = {};
     if (!isInternal && !job?.value) e.job = "Job is required";
     if (isInternal && !staff?.value) e.staff = "Pick a staff member for internal works";
-    if (!template?.value && draftLines.length === 0) {
-      e.template = "Select a template or add items below";
-    }
     setErrors(e);
     return Object.keys(e).length === 0;
   }

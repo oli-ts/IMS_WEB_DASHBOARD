@@ -2,13 +2,24 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabaseBrowser } from "../../../lib/supabase-browser";
+import { createClient } from "@supabase/supabase-js";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import Link from "next/link";
 
 function SignInInner() {
-  const sb = supabaseBrowser();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error("Missing Supabase env vars");
+  }
+  const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: true,
+    },
+  });
   const router = useRouter();
   const sp = useSearchParams();
   const [email, setEmail] = useState("");
@@ -20,9 +31,12 @@ function SignInInner() {
   async function onSubmit(e) {
     e.preventDefault();
     setLoading(true);
-    const { error } = await sb.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
-    if (error) return alert(error.message);
+    if (error) {
+      alert(error.message);
+      return;
+    }
     router.replace(redirectTo);
   }
 
@@ -49,4 +63,3 @@ export default function SignIn() {
     </Suspense>
   );
 }
-

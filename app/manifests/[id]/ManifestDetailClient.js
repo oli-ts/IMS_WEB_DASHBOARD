@@ -5,6 +5,7 @@ import { supabaseBrowser } from "../../../lib/supabase-browser";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { toast } from "sonner";
+import Link from "next/link";
 
 export default function ManifestDetailClient({ manifestId }) {
   const sb = supabaseBrowser();
@@ -133,7 +134,7 @@ export default function ManifestDetailClient({ manifestId }) {
       // Load manifest header for title
       const { data: mh } = await sb
         .from("active_manifests")
-        .select("id, jobs(name)")
+        .select("id, status, jobs(name)")
         .eq("id", manifestId)
         .single();
       setMeta(mh || null);
@@ -150,6 +151,7 @@ export default function ManifestDetailClient({ manifestId }) {
   const [groupRows, setGroupRows] = useState([]);
   const [groupSearchResults, setGroupSearchResults] = useState([]);
   const groupMetaCache = useRef(new Map());
+  const [imagePreview, setImagePreview] = useState(null); // { src, alt }
   useEffect(() => {
     const run = async () => {
       if (!q?.trim()) { setInv([]); setKitResults([]); setGroupSearchResults([]); return; }
@@ -530,7 +532,46 @@ export default function ManifestDetailClient({ manifestId }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-xl font-semibold">Manifest for: {meta?.jobs?.name || "-"}</div>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm text-neutral-500">Manifest</div>
+          <div className="text-xl font-semibold">Manifest for: {meta?.jobs?.name || "-"}</div>
+          {meta?.status ? <div className="text-sm text-neutral-500">Status: {meta.status}</div> : null}
+        </div>
+        {meta?.status && ["pending", "staged"].includes((meta.status || "").toLowerCase()) && (
+          <Button
+            variant="destructive"
+            onClick={async () => {
+              const proceed =
+                typeof window === "undefined"
+                  ? true
+                  : window.confirm(
+                      "This cannot be undone. These items will count against warehouse quantity. Close/delete manifest?"
+                    );
+              if (!proceed) return;
+              const toastId = toast.loading("Closing manifest…");
+              try {
+                const res = await fetch(`/api/manifest/${encodeURIComponent(manifestId)}/close`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ action: "close_and_delete" }),
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  throw new Error(payload?.error || payload?.message || "Failed to close manifest");
+                }
+                toast.success("Manifest closed", { id: toastId });
+                window.location.href = "/manifests";
+              } catch (err) {
+                console.error("Close manifest failed", err);
+                toast.error(err?.message || "Failed to close manifest", { id: toastId });
+              }
+            }}
+          >
+            Close Manifest
+          </Button>
+        )}
+      </div>
       <div className="space-y-3">
         <div className="font-semibold">Add Items</div>
         <Input className="h-9 max-w-md" placeholder="Search inventory by name or UID" value={q} onChange={e=>setQ(e.target.value)} />
@@ -563,12 +604,15 @@ export default function ManifestDetailClient({ manifestId }) {
             const total = typeof i.quantity_total === "number" ? i.quantity_total : null;
             const unit = i.unit || (available !== null || total !== null ? "pcs" : "");
             const unitLabel = unit ? ` ${unit}` : "";
-            const insufficient = available !== null && available <= 0;
-            const duplicates = dupMap[i.uid] || [];
-            return (
+                const insufficient = available !== null && available <= 0;
+                const duplicates = dupMap[i.uid] || [];
+                return (
               <div key={i.uid} className={`p-3 rounded-xl border flex items-center justify-between ${insufficient ? "border-red-300 bg-red-50 dark:border-red-400 dark:bg-red-500/10" : "bg-white dark:bg-neutral-900 dark:border-neutral-800"}`}>
                 <div className="flex items-center gap-3">
-                  <div className={`h-12 w-12 rounded-lg overflow-hidden border ${insufficient ? "border-red-300 bg-red-100/70 dark:border-red-400 dark:bg-red-400/20" : "bg-neutral-100 dark:bg-neutral-800 dark:border-neutral-700"}`}>
+                  <div
+                    className={`h-12 w-12 rounded-lg overflow-hidden border cursor-pointer ${insufficient ? "border-red-300 bg-red-100/70 dark:border-red-400 dark:bg-red-400/20" : "bg-neutral-100 dark:bg-neutral-800 dark:border-neutral-700"}`}
+                    onClick={() => i.photo_url && setImagePreview({ src: i.photo_url, alt: i.name || i.uid })}
+                  >
                     {i.photo_url ? (
                       <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
                     ) : (
@@ -634,7 +678,12 @@ export default function ManifestDetailClient({ manifestId }) {
               <div className="flex items-center gap-3">
                 <div className={`h-12 w-12 rounded-lg overflow-hidden border ${mi.insufficient ? "border-red-300 bg-red-100/70" : "bg-neutral-100"}`}>
                   {mi.photo_url ? (
-                    <img src={mi.photo_url} alt="" className="h-full w-full object-cover" />
+                    <img
+                      src={mi.photo_url}
+                      alt=""
+                      className="h-full w-full object-cover cursor-pointer"
+                      onClick={() => setImagePreview({ src: mi.photo_url, alt: mi.item_name || mi.item_uid })}
+                    />
                   ) : (
                     <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
                   )}
@@ -660,6 +709,29 @@ export default function ManifestDetailClient({ manifestId }) {
           );
         })}
       </div>
+      {imagePreview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setImagePreview(null)}
+          />
+          <div className="relative z-10 bg-white dark:bg-neutral-900 rounded-2xl shadow-xl p-4 max-w-4xl w-[90vw]">
+            <button
+              className="absolute top-2 right-2 text-sm px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800"
+              onClick={() => setImagePreview(null)}
+            >
+              ✕
+            </button>
+            <div className="w-full">
+              <img
+                src={imagePreview.src}
+                alt={imagePreview.alt || "Preview"}
+                className="w-full h-auto object-contain max-h-[80vh] rounded-xl"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

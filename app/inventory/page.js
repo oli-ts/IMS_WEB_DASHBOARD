@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabaseBrowser } from "../../lib/supabase-browser";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent } from "../../components/ui/card";
@@ -35,6 +35,7 @@ export default function InventoryPage() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showConditionStyling, setShowConditionStyling] = useState(true);
   const [aliasMatches, setAliasMatches] = useState([]);
+  const [debouncedQ, setDebouncedQ] = useState("");
   const CACHE_KEYS = {
     items: "inventory_items_v1",
     warehouses: "inventory_warehouses_v1",
@@ -42,6 +43,7 @@ export default function InventoryPage() {
   };
   const [loadingItems, setLoadingItems] = useState(false);
   const [prevItems, setPrevItems] = useState([]);
+  const fetchRef = useRef(0);
 
   function readCache(key) {
     if (typeof window === "undefined") return null;
@@ -94,34 +96,76 @@ export default function InventoryPage() {
   }, []);
 
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => {
+    // Reset to first page when searching across all pages
+    if (debouncedQ) setPage(1);
+  }, [debouncedQ]);
+
+  useEffect(() => {
     const abort = new AbortController();
     let cancelled = false;
+    const fetchId = ++fetchRef.current;
     setLoadingItems(true);
-    setItems([]);
     (async () => {
       try {
-        let query = sb
-          .from("inventory_union")
-          .select("uid,name,brand,model,photo_url,classification,condition,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
-        if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
-        const { data: baseItems, error: invErr } = await query
-          .order("created_at", { ascending: false, nullsFirst: false })
-          .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
-          .abortSignal(abort.signal);
-        if (invErr) throw invErr;
-        const safeItems = baseItems || [];
+        const term = debouncedQ;
+        const doSearch = Boolean(term);
+        const baseSelect =
+          "uid,name,brand,model,photo_url,classification,condition,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at";
+        const range = doSearch
+          ? { start: 0, end: 499 }
+          : { start: (page - 1) * PAGE_SIZE, end: page * PAGE_SIZE - 1 };
+        const like = doSearch ? `%${term}%` : null;
 
-        let metalQuery = sb
-          .from("metal_diamonds")
-          .select("uid,name,brand,model,photo_url,classification,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
-        if (warehouse?.value) metalQuery = metalQuery.eq("warehouse_id", warehouse.value);
-        const { data: metalRaw, error: metalErr } = await metalQuery
-          .order("created_at", { ascending: false, nullsFirst: false })
-          .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
-          .abortSignal(abort.signal);
-        if (metalErr) throw metalErr;
+        const fetchUnion = async () => {
+          let query = sb.from("inventory_union").select(baseSelect);
+          if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
+          if (doSearch && like) {
+            query = query.or(
+              `uid.ilike.${like},name.ilike.${like},brand.ilike.${like},model.ilike.${like},notes.ilike.${like}`
+            );
+          }
+          query = query.order("created_at", { ascending: false, nullsFirst: false }).range(range.start, range.end);
+          const { data, error } = await query.abortSignal(abort.signal);
+          if (error) throw error;
+          return data || [];
+        };
 
-        const seen = new Set(safeItems.map((i) => i.uid));
+        const fetchMetals = async () => {
+          let query = sb
+            .from("metal_diamonds")
+            .select("uid,name,brand,model,photo_url,classification,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
+          if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
+          if (doSearch && like) {
+            query = query.or(
+              `uid.ilike.${like},name.ilike.${like},brand.ilike.${like},model.ilike.${like},notes.ilike.${like}`
+            );
+          }
+          query = query.order("created_at", { ascending: false, nullsFirst: false }).range(range.start, range.end);
+          const { data, error } = await query.abortSignal(abort.signal);
+          if (error) throw error;
+          return data || [];
+        };
+
+        const [baseItems, metalRaw] = await Promise.all([fetchUnion(), fetchMetals()]);
+
+        let aliasRows = [];
+        if (doSearch && aliasMatches.length) {
+          const { data, error } = await sb
+            .from("inventory_union")
+            .select(baseSelect)
+            .in("uid", aliasMatches)
+            .abortSignal(abort.signal);
+          if (error) throw error;
+          aliasRows = data || [];
+        }
+
+        const mergedBase = [...baseItems, ...aliasRows];
+        const seen = new Set(mergedBase.map((i) => i.uid));
         const normalizedMetal = (metalRaw || [])
           .filter((m) => m?.uid && !seen.has(m.uid))
           .map((m) => ({
@@ -130,15 +174,15 @@ export default function InventoryPage() {
             classification: m.classification || "METAL_DIAMOND",
           }));
 
-        const merged = [...safeItems, ...normalizedMetal];
-        if (!cancelled) {
+        const merged = [...mergedBase, ...normalizedMetal];
+        if (!cancelled && fetchRef.current === fetchId) {
           setItems(merged);
           setPrevItems(merged);
         }
       } catch (err) {
         if (!abort.signal.aborted) {
           console.error("[inventory] fetch failed", err?.message || err);
-          if (!cancelled) {
+          if (!cancelled && fetchRef.current === fetchId) {
             if (prevItems.length) {
               setItems(prevItems);
             }
@@ -146,14 +190,14 @@ export default function InventoryPage() {
           }
         }
       } finally {
-        if (!cancelled) setLoadingItems(false);
+        if (!cancelled && fetchRef.current === fetchId) setLoadingItems(false);
       }
     })();
     return () => {
       cancelled = true;
       abort.abort("inventory-page-change");
     };
-  }, [warehouse, page]);
+  }, [warehouse, page, debouncedQ, aliasMatches]);
 
   // Load zones/bays/shelfs maps for display labels
   useEffect(() => {
@@ -193,14 +237,14 @@ export default function InventoryPage() {
   useEffect(() => {
     let isActive = true;
     const controller = new AbortController();
-    if (!q?.trim()) {
+    if (!debouncedQ?.trim()) {
       setGroupRows([]);
       setAliasMatches([]);
       return;
     }
     const t = setTimeout(async () => {
       try {
-        const { data, error } = await sb.rpc("find_group_items", { search_text: q }, { signal: controller.signal });
+        const { data, error } = await sb.rpc("find_group_items", { search_text: debouncedQ }, { signal: controller.signal });
         if (error) throw error;
         if (!isActive) return;
         setGroupRows(data || []);
@@ -215,11 +259,11 @@ export default function InventoryPage() {
       controller.abort("group-search-cancel");
       clearTimeout(t);
     };
-  }, [q, sb]);
+  }, [debouncedQ, sb]);
 
   useEffect(() => {
     let active = true;
-    if (!q?.trim()) {
+    if (!debouncedQ?.trim()) {
       setAliasMatches([]);
       return;
     }
@@ -229,7 +273,7 @@ export default function InventoryPage() {
         const { data, error } = await sb
           .from("item_pseudonyms")
           .select("item_uid")
-          .ilike("alias", `%${q}%`)
+          .ilike("alias", `%${debouncedQ}%`)
           .limit(200);
         if (error) throw error;
         if (!active) return;
@@ -246,7 +290,7 @@ export default function InventoryPage() {
       controller.abort("alias-search-cancel");
       clearTimeout(t);
     };
-  }, [q, sb]);
+  }, [debouncedQ, sb]);
 
   const groupMetaByUid = useMemo(() => {
     const map = {};
@@ -262,7 +306,7 @@ export default function InventoryPage() {
 
   const filtered = useMemo(() => {
     const aliasMatchesSet = new Set(aliasMatches);
-    const lower = q?.toLowerCase() || "";
+    const lower = debouncedQ?.toLowerCase() || "";
     const base = items.filter((i) => {
       const hay = (
         i.uid +

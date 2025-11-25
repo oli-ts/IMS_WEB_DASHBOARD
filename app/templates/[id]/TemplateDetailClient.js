@@ -22,7 +22,7 @@ export default function TemplateDetailClient({ templateId }) {
 
   const [template, setTemplate] = useState(null);
   const [rows, setRows] = useState([]);
-  const [nameByUid, setNameByUid] = useState({});
+  const [itemMetaByUid, setItemMetaByUid] = useState({});
   const [inv, setInv] = useState([]);
   const [kitResults, setKitResults] = useState([]);
   const [groupSearchResults, setGroupSearchResults] = useState([]);
@@ -30,6 +30,7 @@ export default function TemplateDetailClient({ templateId }) {
   const [loading, setLoading] = useState(true);
   const [groupRows, setGroupRows] = useState([]);
   const groupMetaCache = useRef(new Map());
+  const [imagePreview, setImagePreview] = useState(null); // { src, alt }
 
   const [zones, setZones] = useState([]);
   const [bays, setBays] = useState([]);
@@ -70,15 +71,35 @@ export default function TemplateDetailClient({ templateId }) {
     setRows(data || []);
     const uids = Array.from(new Set((data || []).map(r => r.item_uid).filter(Boolean)));
     if (uids.length) {
-      const { data: invNames } = await sb
+      const { data: invMeta } = await sb
         .from("inventory_union")
-        .select("uid,name")
+        .select("uid,name,photo_url,classification")
         .in("uid", uids);
       const map = {};
-      (invNames || []).forEach(i => { map[i.uid] = i.name; });
-      setNameByUid(map);
+      (invMeta || []).forEach(i => {
+        map[i.uid] = {
+          name: i.name,
+          photo_url: i.photo_url,
+          classification: i.classification,
+        };
+      });
+      const missing = uids.filter((uid) => !map[uid]);
+      if (missing.length) {
+        const { data: metalMeta } = await sb
+          .from("metal_diamonds")
+          .select("uid,name,photo_url,classification")
+          .in("uid", missing);
+        (metalMeta || []).forEach((m) => {
+          map[m.uid] = {
+            name: m.name,
+            photo_url: m.photo_url,
+            classification: m.classification || "METAL_DIAMOND",
+          };
+        });
+      }
+      setItemMetaByUid(map);
     } else {
-      setNameByUid({});
+      setItemMetaByUid({});
     }
   }
 
@@ -487,22 +508,25 @@ export default function TemplateDetailClient({ templateId }) {
                 ))}
                 {inv.map(i => (
                   <div key={i.uid} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700">
-                    {i.photo_url ? (
-                      <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
-                    )}
-                  </div>
-                  <div>
-                    <div className="font-medium">{i.name}</div>
-                    <div className="text-xs text-neutral-500">{i.uid} · {i.classification}</div>
-                    {groupMetaByUid[i.uid]?.group_name ? (
-                      <div className="text-xs text-blue-600 mt-1">Group: {groupMetaByUid[i.uid].group_name}</div>
-                    ) : null}
-                  </div>
-                </div>
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer"
+                        onClick={() => i.photo_url && setImagePreview({ src: i.photo_url, alt: i.name || i.uid })}
+                      >
+                        {i.photo_url ? (
+                          <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
+                        )}
+                      </div>
+                      <div>
+                        <div className="font-medium">{i.name}</div>
+                        <div className="text-xs text-neutral-500">{i.uid} · {i.classification}</div>
+                        {groupMetaByUid[i.uid]?.group_name ? (
+                          <div className="text-xs text-blue-600 mt-1">Group: {groupMetaByUid[i.uid].group_name}</div>
+                        ) : null}
+                      </div>
+                    </div>
                     <AddInline uid={i.uid} onAdd={addItemToTemplate} />
                   </div>
                 ))}
@@ -514,13 +538,28 @@ export default function TemplateDetailClient({ templateId }) {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="font-semibold">Template Items</div>
-                <div className="text-sm text-neutral-500">{totalLines} lines · {totalQty} total qty</div>
+              <div className="text-sm text-neutral-500">{totalLines} lines · {totalQty} total qty</div>
               </div>
               <div className="grid gap-2 max-h-[420px] overflow-auto">
                 {rows.map(r => (
                   <div key={r.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="font-medium">{nameByUid[r.item_uid] || r.item_uid}</div>
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer"
+                          onClick={() => itemMetaByUid[r.item_uid]?.photo_url && setImagePreview({ src: itemMetaByUid[r.item_uid].photo_url, alt: itemMetaByUid[r.item_uid].name || r.item_uid })}
+                        >
+                          {itemMetaByUid[r.item_uid]?.photo_url ? (
+                            <img src={itemMetaByUid[r.item_uid].photo_url} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
+                          )}
+                        </div>
+                        <div>
+                          <div className="font-medium">{itemMetaByUid[r.item_uid]?.name || r.item_uid}</div>
+                          <div className="text-xs text-neutral-500">{r.item_uid}</div>
+                        </div>
+                      </div>
                       <div className="flex items-center gap-2">
                         <QtyEditor value={r.qty_required} onChange={v=>updateQty(r.id, v)} />
                         <Button size="sm" variant="outline" onClick={()=>removeLine(r.id)}>Remove</Button>
@@ -534,6 +573,26 @@ export default function TemplateDetailClient({ templateId }) {
           </div>
         </CardContent>
       </Card>
+      {imagePreview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setImagePreview(null)} />
+          <div className="relative z-10 bg-white dark:bg-neutral-900 rounded-2xl shadow-xl p-4 max-w-4xl w-[90vw]">
+            <button
+              className="absolute top-2 right-2 text-sm px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800"
+              onClick={() => setImagePreview(null)}
+            >
+              ✕
+            </button>
+            <div className="w-full">
+              <img
+                src={imagePreview.src}
+                alt={imagePreview.alt || "Preview"}
+                className="w-full h-auto object-contain max-h-[80vh] rounded-xl"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

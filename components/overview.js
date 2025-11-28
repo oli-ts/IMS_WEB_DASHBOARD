@@ -15,6 +15,7 @@ export default function Overview() {
   });
   const [needsRepair, setNeedsRepair] = useState([]);
   const [needsMaintenance, setNeedsMaintenance] = useState([]);
+  const [lowStockItems, setLowStockItems] = useState([]);
   const sb = useMemo(() => supabaseBrowser(), []);
 
   async function fetchConditionItems(conditionValue) {
@@ -68,14 +69,105 @@ export default function Overview() {
     }));
   }
 
+  async function fetchLowStock() {
+    try {
+      const { data: baselineRows, error } = await sb
+        .from("item_stock_baselines")
+        .select("item_uid, baseline_qty")
+        .gt("baseline_qty", 0)
+        .limit(500);
+      if (error) throw error;
+      const baselineMap = {};
+      const uids = [];
+      for (const row of baselineRows || []) {
+        if (!row?.item_uid) continue;
+        const baselineVal = Number(row.baseline_qty);
+        if (!Number.isFinite(baselineVal)) continue;
+        baselineMap[row.item_uid] = baselineVal;
+        uids.push(row.item_uid);
+      }
+      if (!uids.length) return [];
+
+      const { data: inv } = await sb
+        .from("inventory_union")
+        .select("uid,name,photo_url,quantity_total,unit,classification")
+        .in("uid", uids);
+      const merged = [...(inv || [])];
+      const seen = new Set((inv || []).map((r) => r.uid));
+      const missingAfterInv = uids.filter((u) => !seen.has(u));
+
+      if (missingAfterInv.length) {
+        const { data: metals } = await sb
+          .from("metal_diamonds")
+          .select("uid,name,photo_url,quantity_total,unit,classification")
+          .in("uid", missingAfterInv);
+        for (const m of metals || []) {
+          if (!m?.uid || seen.has(m.uid)) continue;
+          merged.push({
+            ...m,
+            classification: m.classification || "METAL_DIAMOND",
+          });
+          seen.add(m.uid);
+        }
+      }
+
+      const stillMissing = uids.filter((u) => !seen.has(u));
+      if (stillMissing.length) {
+        const { data: reg } = await sb
+          .from("uid_registry")
+          .select("uid,name,photo_url,classification")
+          .in("uid", stillMissing);
+        for (const r of reg || []) {
+          if (!r?.uid || seen.has(r.uid)) continue;
+          merged.push({
+            ...r,
+            quantity_total: r.quantity_total ?? null,
+            unit: r.unit || "",
+          });
+          seen.add(r.uid);
+        }
+      }
+
+      const list = merged
+        .map((row) => {
+          const qty = typeof row.quantity_total === "number" ? row.quantity_total : 0;
+          const baseline = baselineMap[row.uid] ?? null;
+          return {
+            ...row,
+            quantity_total: qty,
+            baseline,
+          };
+        })
+        .filter((row) => row.baseline !== null && row.quantity_total <= row.baseline);
+
+      return list.sort((a, b) => {
+        const deficitA = a.baseline - a.quantity_total;
+        const deficitB = b.baseline - b.quantity_total;
+        if (deficitA !== deficitB) return deficitB - deficitA;
+        return (a.name || "").localeCompare(b.name || "");
+      });
+    } catch (err) {
+      console.warn("[overview] low stock fetch failed", err?.message || err);
+      return [];
+    }
+  }
+
   useEffect(() => {
     async function load() {
-      const [{ data: cons }, { data: jobs }, { data: ex }, repairItems, maintenanceItems] = await Promise.all([
+      const [
+        { data: cons },
+        { data: jobs },
+        { data: ex },
+        repairItems,
+        maintenanceItems,
+        lowStock,
+      ] = await Promise.all([
         sb.from("consumable_stock").select("uid"),
         sb.from("active_manifests").select("id"),
         sb.from("exceptions").select("id"),
         fetchConditionItems("broken"),
         fetchConditionItems("needs_service"),
+        fetchLowStock(),
       ]);
       let totalItems = 0;
       try {
@@ -95,7 +187,7 @@ export default function Overview() {
         stock: cons?.length || 0,
         activeJobs: jobs?.length || 0,
         exceptions: ex?.length || 0,
-        lowStock: 0,
+        lowStock: lowStock?.length || 0,
         totalItems,
       });
       const order = (rows) => {
@@ -114,6 +206,7 @@ export default function Overview() {
       };
       setNeedsRepair(order(repairItems));
       setNeedsMaintenance(order(maintenanceItems));
+      setLowStockItems(lowStock || []);
     }
     load();
   }, [sb]);
@@ -137,6 +230,60 @@ export default function Overview() {
           </Card>
         ))}
       </div>
+
+      <Card className="border-red-200 bg-red-50 dark:border-red-700 dark:bg-neutral-900/40">
+        <CardHeader className="flex items-center justify-between">
+          <div className="font-semibold text-red-800 dark:text-red-200">Low Stock Alerts</div>
+          <div className="text-sm text-red-700 dark:text-red-200">{lowStockItems.length} item{lowStockItems.length === 1 ? "" : "s"}</div>
+        </CardHeader>
+        <CardContent className="space-y-3 max-h-[420px] overflow-auto scrollbar-ghost">
+          {lowStockItems.length === 0 ? (
+            <div className="text-sm text-red-700 dark:text-red-200">No items are currently below baseline.</div>
+          ) : (
+            lowStockItems.map((item) => {
+              const qty = typeof item.quantity_total === "number" ? item.quantity_total : 0;
+              const baseline = item.baseline ?? 0;
+              const deficit = Math.max(0, baseline - qty);
+              return (
+                <div
+                  key={item.uid}
+                  className="flex gap-3 p-3 rounded-xl border border-red-200 bg-white/80 dark:bg-neutral-900 dark:border-red-700"
+                >
+                  <div className="h-12 w-12 rounded-lg overflow-hidden bg-red-100 border border-red-200 dark:bg-neutral-800 dark:border-red-700 shrink-0">
+                    {item.photo_url ? (
+                      <img src={item.photo_url} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="h-full w-full grid place-items-center text-[10px] text-red-500">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-red-800 dark:text-red-100 truncate">
+                      {item.name || "Unnamed"}
+                    </div>
+                    <div className="text-xs text-neutral-600 dark:text-neutral-300 truncate">
+                      {item.uid}
+                      {item.classification ? ` · ${(item.classification || "").replace(/_/g, " ")}` : ""}
+                    </div>
+                    <div className="text-xs text-red-700 dark:text-red-200 mt-1">
+                      Qty {qty} {item.unit || ""} / Baseline {baseline} {item.unit || ""}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="text-xs font-semibold text-red-700 dark:text-red-200">
+                      -{deficit}
+                    </div>
+                    <Link href={`/inventory/${encodeURIComponent(item.uid)}`}>
+                      <Button size="sm" variant="outline">View</Button>
+                    </Link>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid md:grid-cols-2 gap-4">
         <Card className="border-red-200 dark:border-red-500 max-h-[500px] overflow-hidden overflow-y-auto scrollbar-ghost">

@@ -97,6 +97,20 @@ export default function TemplateDetailClient({ templateId }) {
           };
         });
       }
+      const stillMissing = uids.filter((uid) => !map[uid]);
+      if (stillMissing.length) {
+        const { data: regMeta } = await sb
+          .from("uid_registry")
+          .select("uid,name,photo_url,classification")
+          .in("uid", stillMissing);
+        (regMeta || []).forEach((r) => {
+          map[r.uid] = {
+            name: r.name,
+            photo_url: r.photo_url,
+            classification: r.classification || map[r.uid]?.classification || null,
+          };
+        });
+      }
       setItemMetaByUid(map);
     } else {
       setItemMetaByUid({});

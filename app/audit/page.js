@@ -10,6 +10,8 @@ import { toast } from "sonner";
 
 export default function AuditPage() {
   const sb = supabaseBrowser();
+  const [warehouses, setWarehouses] = useState([]);
+  const [warehouse, setWarehouse] = useState(null);
   const [zones, setZones] = useState([]);
   const [bays, setBays] = useState([]);
   const [shelfs, setShelfs] = useState([]);
@@ -18,13 +20,51 @@ export default function AuditPage() {
   const [itemsByShelf, setItemsByShelf] = useState({});
   const [loading, setLoading] = useState(false);
   const [openShelfs, setOpenShelfs] = useState({});
+  const [baselineByUid, setBaselineByUid] = useState({});
 
   useEffect(() => {
     (async () => {
-      const { data } = await sb.from("zones").select("id,name").order("name");
-      setZones((data || []).map((z) => ({ value: z.id, label: z.name })));
+      const { data, error } = await sb.from("warehouse").select("id, wh_number, name").order("wh_number");
+      if (error) {
+        console.warn("[audit] warehouse fetch failed", error);
+        setWarehouses([]);
+        return;
+      }
+      const opts = (data || []).map((w) => ({
+        value: w.id,
+        label: w.wh_number ? `${w.wh_number} — ${w.name}` : w.name,
+      }));
+      setWarehouses(opts);
+      if (opts.length && !warehouse) setWarehouse(opts[0]);
     })();
   }, [sb]);
+
+  useEffect(() => {
+    if (!warehouse?.value) {
+      setZones([]);
+      setZone(null);
+      setBays([]);
+      setBay(null);
+      setShelfs([]);
+      setItemsByShelf({});
+      setBaselineByUid({});
+      return;
+    }
+    (async () => {
+      const { data } = await sb
+        .from("zones")
+        .select("id,name")
+        .eq("warehouse_id", warehouse.value)
+        .order("name");
+      const opts = (data || []).map((z) => ({ value: z.id, label: z.name }));
+      setZones(opts);
+      setZone(opts[0] || null);
+      setBay(null);
+      setShelfs([]);
+      setItemsByShelf({});
+      setBaselineByUid({});
+    })();
+  }, [warehouse, sb]);
 
   useEffect(() => {
     if (!zone?.value) {
@@ -32,6 +72,7 @@ export default function AuditPage() {
       setBay(null);
       setShelfs([]);
       setItemsByShelf({});
+      setBaselineByUid({});
       return;
     }
     (async () => {
@@ -46,6 +87,7 @@ export default function AuditPage() {
     if (!zone?.value || !bay?.value) {
       setShelfs([]);
       setItemsByShelf({});
+      setBaselineByUid({});
       return;
     }
     (async () => {
@@ -75,11 +117,13 @@ export default function AuditPage() {
           if (idx >= 0) merged[idx] = { ...merged[idx], ...m };
           else merged.push({ ...m, classification: m.classification || "METAL_DIAMOND" });
         }
+        const uidList = Array.from(new Set(merged.map((i) => i.uid).filter(Boolean)));
+        const baselineMap = await loadBaselines(uidList);
         const grouped = {};
         for (const itm of merged) {
           const key = itm.shelf_id || "none";
           if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(itm);
+          grouped[key].push({ ...itm, baseline_qty: baselineMap[itm.uid] ?? null });
         }
         setItemsByShelf(grouped);
       } finally {
@@ -102,6 +146,30 @@ export default function AuditPage() {
       }
       return next;
     });
+  }
+
+  async function loadBaselines(uids = []) {
+    if (!uids?.length) {
+      setBaselineByUid({});
+      return {};
+    }
+    try {
+      const { data, error } = await sb
+        .from("item_stock_baselines")
+        .select("item_uid, baseline_qty")
+        .in("item_uid", uids);
+      if (error) throw error;
+      const map = {};
+      for (const row of data || []) {
+        map[row.item_uid] = typeof row.baseline_qty === "number" ? row.baseline_qty : null;
+      }
+      setBaselineByUid(map);
+      return map;
+    } catch (err) {
+      console.warn("[audit] baseline fetch failed", err?.message || err);
+      setBaselineByUid({});
+      return {};
+    }
   }
 
   async function changeQty(itm, delta) {
@@ -147,6 +215,50 @@ export default function AuditPage() {
     }
   }
 
+  async function changeBaseline(itm, rawValue) {
+    const uid = itm?.uid;
+    if (!uid) {
+      toast.error("Missing UID for baseline");
+      return;
+    }
+    const trimmed = String(rawValue ?? "").trim();
+    if (trimmed === "") {
+      try {
+        const { error } = await sb.from("item_stock_baselines").delete().eq("item_uid", uid);
+        if (error) throw error;
+        setBaselineByUid((prev) => {
+          const next = { ...prev };
+          delete next[uid];
+          return next;
+        });
+        updateLocalItem(uid, (row) => ({ ...row, baseline_qty: null }));
+        toast.success("Baseline cleared");
+      } catch (err) {
+        console.error("[audit] baseline clear failed", err);
+        toast.error("Failed to clear baseline");
+      }
+      return;
+    }
+    const num = Number(trimmed);
+    if (!Number.isFinite(num)) {
+      toast.error("Baseline must be a number");
+      return;
+    }
+    const baseline = Math.max(0, num);
+    try {
+      const { error } = await sb
+        .from("item_stock_baselines")
+        .upsert({ item_uid: uid, baseline_qty: baseline }, { onConflict: "item_uid" });
+      if (error) throw error;
+      setBaselineByUid((prev) => ({ ...prev, [uid]: baseline }));
+      updateLocalItem(uid, (row) => ({ ...row, baseline_qty: baseline }));
+      toast.success("Baseline saved");
+    } catch (err) {
+      console.error("[audit] baseline save failed", err);
+      toast.error("Failed to save baseline");
+    }
+  }
+
   async function deleteItem(itm) {
     const ok = typeof window === "undefined" ? true : window.confirm(`Delete ${itm.name || itm.uid}?`);
     if (!ok) return;
@@ -168,6 +280,15 @@ export default function AuditPage() {
         <div>
           <div className="text-sm text-neutral-500">Audit</div>
           <h1 className="text-2xl font-semibold">Zone / Bay Shelf Check</h1>
+        </div>
+        <div className="w-64">
+          <Select
+            items={warehouses}
+            triggerLabel={warehouse?.label || "Select warehouse"}
+            onSelect={(opt) => {
+              setWarehouse(opt);
+            }}
+          />
         </div>
       </div>
 
@@ -221,37 +342,48 @@ export default function AuditPage() {
                     ) : (
                       <div className="overflow-x-auto pb-2 scrollbar-ghost">
                         <div className="flex gap-3 min-h-[12rem]">
-                          {items.map((itm) => (
-                            <div
-                              key={itm.uid}
-                              className="w-48 min-w-[12rem] p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 shrink-0"
-                            >
-                              <div className="h-24 rounded-lg overflow-hidden bg-neutral-100 border">
-                                {itm.photo_url ? (
-                                  <img src={itm.photo_url} alt="" className="h-full w-full object-cover" />
-                                ) : (
-                                  <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">
-                                    No image
-                                  </div>
-                                )}
+                          {items.map((itm) => {
+                            const qty = typeof itm.quantity_total === "number" ? itm.quantity_total : null;
+                            const baseline = itm.baseline_qty ?? baselineByUid[itm.uid] ?? null;
+                            const lowStock = baseline !== null && qty !== null && qty <= baseline;
+                            return (
+                              <div
+                                key={itm.uid}
+                                className="w-48 min-w-[12rem] p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 shrink-0"
+                              >
+                                <div className="h-24 rounded-lg overflow-hidden bg-neutral-100 border">
+                                  {itm.photo_url ? (
+                                    <img src={itm.photo_url} alt="" className="h-full w-full object-cover" />
+                                  ) : (
+                                    <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">
+                                      No image
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="mt-2 font-medium text-sm truncate">{itm.name}</div>
+                                <div className="text-xs text-neutral-500 truncate">{itm.uid}</div>
+                                <div className="text-xs text-neutral-500 mt-1">
+                                  Qty: {qty ?? "—"} {itm.unit || ""}
+                                </div>
+                                <div className={`text-xs mt-1 ${lowStock ? "text-red-600 font-semibold" : "text-neutral-500"}`}>
+                                  Baseline: {baseline ?? "—"}{lowStock ? " · Low stock" : ""}
+                                </div>
+                                <div className="mt-2">
+                                  <BaselineEditor value={baseline ?? ""} onChange={(v) => changeBaseline(itm, v)} />
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2 items-center">
+                                  <Button size="sm" variant="outline" onClick={() => changeQty(itm, -1)}>-1</Button>
+                                  <Button size="sm" variant="outline" onClick={() => changeQty(itm, 1)}>+1</Button>
+                                  <Link href={`/inventory/${encodeURIComponent(itm.uid)}?edit=1`} target="_blank">
+                                    <Button size="sm" variant="secondary">Edit</Button>
+                                  </Link>
+                                  <Button size="sm" variant="destructive" onClick={() => deleteItem(itm)}>
+                                    Delete
+                                  </Button>
+                                </div>
                               </div>
-                              <div className="mt-2 font-medium text-sm truncate">{itm.name}</div>
-                              <div className="text-xs text-neutral-500 truncate">{itm.uid}</div>
-                              <div className="text-xs text-neutral-500 mt-1">
-                                Qty: {typeof itm.quantity_total === "number" ? itm.quantity_total : "—"} {itm.unit || ""}
-                              </div>
-                              <div className="mt-2 flex flex-wrap gap-2 items-center">
-                                <Button size="sm" variant="outline" onClick={() => changeQty(itm, -1)}>-1</Button>
-                                <Button size="sm" variant="outline" onClick={() => changeQty(itm, 1)}>+1</Button>
-                                <Link href={`/inventory/${encodeURIComponent(itm.uid)}?edit=1`} target="_blank">
-                                  <Button size="sm" variant="secondary">Edit</Button>
-                                </Link>
-                                <Button size="sm" variant="destructive" onClick={() => deleteItem(itm)}>
-                                  Delete
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -262,6 +394,27 @@ export default function AuditPage() {
           })
         )}
       </div>
+    </div>
+  );
+}
+
+function BaselineEditor({ value, onChange }) {
+  const [v, setV] = useState(value === null || value === undefined ? "" : String(value));
+  useEffect(() => {
+    setV(value === null || value === undefined ? "" : String(value));
+  }, [value]);
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        type="number"
+        min="0"
+        className="w-24 h-9"
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => onChange(v)}
+        placeholder="Baseline"
+      />
+      <Button size="sm" variant="outline" onClick={() => onChange(v)}>Set</Button>
     </div>
   );
 }

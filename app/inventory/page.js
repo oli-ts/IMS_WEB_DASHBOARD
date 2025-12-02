@@ -151,7 +151,23 @@ export default function InventoryPage() {
           return data || [];
         };
 
-        const [baseItems, metalRaw] = await Promise.all([fetchUnion(), fetchMetals()]);
+        const fetchKits = async () => {
+          let query = sb
+            .from("inventory_kits")
+            .select("uid,name,photo_url,classification,notes,quantity_total,unit,zone_id,bay_id,shelf_id,status,created_at,warehouse_id");
+          if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
+          if (doSearch && like) {
+            query = query.or(
+              `uid.ilike.${like},name.ilike.${like},notes.ilike.${like}`
+            );
+          }
+          query = query.order("created_at", { ascending: false, nullsFirst: false }).range(range.start, range.end);
+          const { data, error } = await query.abortSignal(abort.signal);
+          if (error) throw error;
+          return data || [];
+        };
+
+        const [baseItems, metalRaw, kitRaw] = await Promise.all([fetchUnion(), fetchMetals(), fetchKits()]);
 
         let aliasRows = [];
         if (doSearch && aliasMatches.length) {
@@ -173,6 +189,15 @@ export default function InventoryPage() {
             source_table: m.source_table || "metal_diamonds",
             classification: m.classification || "METAL_DIAMOND",
           }));
+        for (const k of kitRaw || []) {
+          if (!k?.uid || seen.has(k.uid)) continue;
+          mergedBase.push({
+            ...k,
+            source_table: k.source_table || "inventory_kits",
+            classification: k.classification || "KIT",
+          });
+          seen.add(k.uid);
+        }
 
         const merged = [...mergedBase, ...normalizedMetal];
         if (!cancelled && fetchRef.current === fetchId) {
@@ -224,10 +249,11 @@ export default function InventoryPage() {
     const classVals = uniq((items || []).map((i) => (i.classification || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
     // Ensure Accessories shows even if no rows in first fetch
     if (!classVals.includes("ACCESSORY")) classVals.push("ACCESSORY");
+    if (!classVals.includes("KIT")) classVals.push("KIT");
     const statusVals = uniq((items || []).map((i) => (i.status || "").trim()).filter(Boolean)).sort((a, b) => a.localeCompare(b));
 
     setBrands([{ value: "", label: "None" }, ...brandVals.map((v) => ({ value: v, label: v }))]);
-    const labelMap = { ACCESSORY: "Accessories (ACC)", METAL_DIAMOND: "Metal Diamonds (MD)" };
+    const labelMap = { ACCESSORY: "Accessories (ACC)", METAL_DIAMOND: "Metal Diamonds (MD)", KIT: "Kits (KIT)" };
     setClassifications([{ value: "", label: "None" }, ...classVals.map((v) => ({ value: v, label: labelMap[v] || v }))]);
     setStatuses([{ value: "", label: "None" }, ...statusVals.map((v) => ({ value: v, label: v }))]);
   }, [items]);

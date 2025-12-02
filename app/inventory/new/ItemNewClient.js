@@ -21,6 +21,7 @@ const CLASS_OPTIONS = [
   { value: "workshop_tools", label: "Workshop Tools (WT)" },
   { value: "vehicles", label: "Vehicles (VEH)" },
   { value: "metal_diamonds", label: "Metal Diamonds (MD)" },
+  { value: "inventory_kits", label: "Kits (KIT)" },
 ];
 
 const UNIT_OPTIONS = [
@@ -41,6 +42,7 @@ const CLASS_DB_CONST = {
   workshop_tools: "WORKSHOP_TOOL",
   vehicles: "VEHICLE",
   metal_diamonds: "METAL_DIAMOND",
+  inventory_kits: "KIT",
 };
 
 const PREFIX = {
@@ -54,6 +56,7 @@ const PREFIX = {
   workshop_tools: "WT",
   vehicles: "VEH",
   metal_diamonds: "MD",
+  inventory_kits: "KIT",
 };
 
 export default function ItemNewClient() {

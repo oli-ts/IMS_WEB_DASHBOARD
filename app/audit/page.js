@@ -190,6 +190,7 @@ export default function AuditPage() {
         SUNDRY: "sundries",
         WORKSHOP_TOOL: "workshop_tools",
         VEHICLE: "vehicles",
+        KIT: "inventory_kits",
       }[clsKey] ||
         "");
     if (!table) {

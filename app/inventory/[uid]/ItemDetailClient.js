@@ -73,6 +73,12 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
   const [aliases, setAliases] = useState([]);
   const [aliasInput, setAliasInput] = useState("");
   const [aliasLoading, setAliasLoading] = useState(false);
+  const [baselineQty, setBaselineQty] = useState("");
+  const [baselineSaving, setBaselineSaving] = useState(false);
+  const [baselineLoading, setBaselineLoading] = useState(false);
+  const [kitItems, setKitItems] = useState([]);
+  const [kitItemsMeta, setKitItemsMeta] = useState({});
+  const [kitItemsLoading, setKitItemsLoading] = useState(false);
 
   // classification options & constants
   const CLASS_OPTIONS = [
@@ -86,6 +92,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
     { value: "workshop_tools", label: "Workshop Tools (WT)" },
     { value: "vehicles", label: "Vehicles (VEH)" },
     { value: "metal_diamonds", label: "Metal Diamonds (MD)" },
+    { value: "inventory_kits", label: "Kits (KIT)" },
   ];
   const TABLE_CLASS_CONST = {
     light_tooling: "LIGHT_TOOL",
@@ -98,6 +105,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
     workshop_tools: "WORKSHOP_TOOL",
     vehicles: "VEHICLE",
     metal_diamonds: "METAL_DIAMOND",
+    inventory_kits: "KIT",
   };
   const DB_TO_CLASS_VALUE = Object.fromEntries(
     Object.entries(TABLE_CLASS_CONST).map(([k, v]) => [v, k])
@@ -238,6 +246,22 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
           };
           diamondFieldsLoaded = true;
         }
+        if (!baseItem) {
+          const { data: kitRow } = await sb
+            .from("inventory_kits")
+            .select(
+              "id,uid,kit_id,name,description,photo_url,classification,notes,quantity_total,quantity_reserved,quantity_available,unit,warehouse_id,zone_id,bay_id,shelf_id,status,created_at,updated_at"
+            )
+            .eq("uid", uid)
+            .maybeSingle();
+          if (kitRow) {
+            baseItem = {
+              ...kitRow,
+              source_table: "inventory_kits",
+              classification: kitRow.classification || "KIT",
+            };
+          }
+        }
       }
 
       const itmClassSlug = baseItem?.classification
@@ -333,6 +357,67 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
       setEx(e || []);
     })();
   }, [uid, sb]);
+
+  useEffect(() => {
+    const kitId = item?.kit_id || item?.kit_uuid || null;
+    if (!item || (item.classification || "").toUpperCase() !== "KIT" || !kitId) {
+      setKitItems([]);
+      setKitItemsMeta({});
+      return;
+    }
+    let active = true;
+    setKitItemsLoading(true);
+    (async () => {
+      try {
+        const { data, error } = await sb
+          .from("kit_items")
+          .select("item_uid,quantity")
+          .eq("kit_id", kitId);
+        if (error) throw error;
+        if (!active) return;
+        const rows = data || [];
+        setKitItems(rows);
+        const uids = Array.from(new Set(rows.map((r) => r.item_uid).filter(Boolean)));
+        if (!uids.length) {
+          setKitItemsMeta({});
+          return;
+        }
+        const metaMap = {};
+        const { data: inv } = await sb
+          .from("inventory_union")
+          .select("uid,name,photo_url,classification,unit,quantity_total")
+          .in("uid", uids);
+        for (const r of inv || []) {
+          metaMap[r.uid] = r;
+        }
+        const missing = uids.filter((u) => !metaMap[u]);
+        if (missing.length) {
+          const { data: metals } = await sb
+            .from("metal_diamonds")
+            .select("uid,name,photo_url,classification,unit,quantity_total")
+            .in("uid", missing);
+          for (const m of metals || []) {
+            metaMap[m.uid] = {
+              ...m,
+              classification: m.classification || "METAL_DIAMOND",
+            };
+          }
+        }
+        setKitItemsMeta(metaMap);
+      } catch (err) {
+        console.warn("[item detail] kit items fetch failed", err?.message || err);
+        if (active) {
+          setKitItems([]);
+          setKitItemsMeta({});
+        }
+      } finally {
+        if (active) setKitItemsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [item, sb]);
 
   useEffect(() => {
     let active = true;
@@ -465,6 +550,42 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
   }, [uid, sb]);
 
   useEffect(() => {
+    if (!uid) return;
+    let active = true;
+    (async () => {
+      setBaselineLoading(true);
+      try {
+        const { data, error } = await sb
+          .from("item_stock_baselines")
+          .select("baseline_qty")
+          .eq("item_uid", uid)
+          .maybeSingle();
+        if (error) {
+          // Gracefully handle missing table or RLS issues without breaking page load
+          console.warn("[item detail] baseline fetch error", error);
+          if (!active) return;
+          setBaselineQty("");
+          return;
+        }
+        if (!active) return;
+        setBaselineQty(
+          data?.baseline_qty === null || data?.baseline_qty === undefined
+            ? ""
+            : String(data.baseline_qty)
+        );
+      } catch (err) {
+        console.warn("[item detail] baseline fetch failed", err?.message || err);
+        if (active) setBaselineQty("");
+      } finally {
+        if (active) setBaselineLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [uid, sb]);
+
+  useEffect(() => {
     if (!openEdit || editAutoOpened) return;
     if (item) {
       setEditOpen(true);
@@ -515,6 +636,46 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
       toast.success("Alias added");
     } catch (err) {
       toast.error(err?.message || "Failed to add alias");
+    }
+  }
+
+  async function saveBaselineQty(rawValue) {
+    if (!uid) return;
+    const trimmed = String(rawValue ?? baselineQty ?? "").trim();
+    if (trimmed === "") {
+      try {
+        setBaselineSaving(true);
+        const { error } = await sb.from("item_stock_baselines").delete().eq("item_uid", uid);
+        if (error) throw error;
+        setBaselineQty("");
+        toast.success("Baseline cleared");
+      } catch (err) {
+        console.error("[item detail] baseline clear failed", err);
+        toast.error("Failed to clear baseline");
+      } finally {
+        setBaselineSaving(false);
+      }
+      return;
+    }
+    const num = Number(trimmed);
+    if (!Number.isFinite(num)) {
+      toast.error("Baseline must be a number");
+      return;
+    }
+    const baseline = Math.max(0, num);
+    try {
+      setBaselineSaving(true);
+      const { error } = await sb
+        .from("item_stock_baselines")
+        .upsert({ item_uid: uid, baseline_qty: baseline }, { onConflict: "item_uid" });
+      if (error) throw error;
+      setBaselineQty(String(baseline));
+      toast.success("Baseline saved");
+    } catch (err) {
+      console.error("[item detail] baseline save failed", err);
+      toast.error("Failed to save baseline");
+    } finally {
+      setBaselineSaving(false);
     }
   }
 
@@ -700,6 +861,45 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
                 )}
               </div>
 
+              {item?.classification?.toUpperCase() === "KIT" && (
+                <div className="mt-4">
+                  <div className="text-sm text-neutral-500 mb-2">Kit Contents</div>
+                  {kitItemsLoading ? (
+                    <div className="text-sm text-neutral-500">Loading kit items…</div>
+                  ) : kitItems.length === 0 ? (
+                    <div className="text-sm text-neutral-500">No items linked to this kit.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {kitItems.map((row, idx) => {
+                        const meta = kitItemsMeta[row.item_uid] || {};
+                        return (
+                          <div key={`${row.item_uid}:${idx}`} className="flex items-center justify-between border rounded-md px-3 py-2">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="h-10 w-10 rounded-md overflow-hidden bg-neutral-100 border shrink-0">
+                                {meta.photo_url ? (
+                                  <img src={meta.photo_url} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-medium truncate">{meta.name || row.item_uid}</div>
+                                <div className="text-xs text-neutral-500 truncate">
+                                  UID: {row.item_uid}{meta.classification ? ` · ${meta.classification}` : ""}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-sm text-neutral-700">
+                              Qty: {row.quantity}{meta.unit ? ` ${meta.unit}` : ""}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Consumable qty badges */}
               {(() => {
                 const cls = classificationSlug || item.classification;
@@ -751,6 +951,31 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
                   {"reserved" in qty && <Row label="Reserved (legacy)" value={fmtNum(qty.reserved)} />}
                   {"available" in qty && <Row label="Available (legacy)" value={fmtNum(qty.available)} />}
                   <Row label="Unit" value={qty.unit} />
+                  <Row
+                    label="Baseline Qty"
+                    value={
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          className="w-28 h-9"
+                          value={baselineQty}
+                          disabled={baselineLoading || baselineSaving}
+                          onChange={(e) => setBaselineQty(e.target.value)}
+                          onBlur={() => saveBaselineQty(baselineQty)}
+                          placeholder="e.g. 10"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={baselineSaving || baselineLoading}
+                          onClick={() => saveBaselineQty(baselineQty)}
+                        >
+                          {baselineSaving ? "Saving…" : "Save"}
+                        </Button>
+                      </div>
+                    }
+                  />
                   <Row label="QR Payload" value={<code className="break-all">{item.qr_payload}</code>} />
                   <Row label="Notes" value={item.notes || "—"} />
                 </div>

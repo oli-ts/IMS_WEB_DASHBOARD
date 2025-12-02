@@ -20,6 +20,8 @@ export default function KitsPage() {
   const [savingKit, setSavingKit] = useState(false);
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState([]);
+  const [kitInventoryQty, setKitInventoryQty] = useState(1);
+  const [creatingInventoryItem, setCreatingInventoryItem] = useState(false);
 
   useEffect(() => {
     loadKits();
@@ -262,6 +264,30 @@ export default function KitsPage() {
     }
   }
 
+  async function createInventoryKitItem() {
+    if (!selectedKitId) return;
+    const qty = Math.max(1, Number(kitInventoryQty) || 1);
+    setCreatingInventoryItem(true);
+    try {
+      const res = await fetch("/api/kits/materialize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kitId: selectedKitId, quantity: qty }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.error || "Failed to create kit inventory item");
+      toast.success(`Created kit inventory item${payload?.uid ? ` ${payload.uid}` : ""}`);
+      if (payload?.uid) {
+        window.open(`/inventory/${encodeURIComponent(payload.uid)}`, "_blank");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to create kit inventory item");
+    } finally {
+      setCreatingInventoryItem(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -428,6 +454,31 @@ export default function KitsPage() {
                       No items in this kit yet.
                     </div>
                   )}
+                </div>
+                <div className="p-3 rounded-md border bg-neutral-50 dark:bg-neutral-900/40 space-y-2">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="font-semibold">Create inventory kit</div>
+                      <div className="text-xs text-neutral-500">
+                        Materializes this kit as a physical inventory item (classification KIT) with its contents intact.
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="1"
+                        className="w-24"
+                        value={kitInventoryQty}
+                        onChange={(e) => setKitInventoryQty(e.target.value)}
+                      />
+                      <Button
+                        onClick={createInventoryKitItem}
+                        disabled={creatingInventoryItem}
+                      >
+                        {creatingInventoryItem ? "Creating…" : "Create"}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </>
             ) : (

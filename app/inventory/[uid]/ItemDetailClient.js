@@ -237,7 +237,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
           .from("metal_diamonds")
           .select("*")
           .eq("uid", uid)
-          .single();
+          .maybeSingle();
         if (fallbackDiamond) {
           baseItem = {
             ...fallbackDiamond,
@@ -275,7 +275,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
             .from("metal_diamonds")
             .select("case_uid,baseline_height_mm,current_height_mm,set_size")
             .eq("uid", baseItem.uid)
-            .single();
+            .maybeSingle();
           if (diamondDetails) {
             itm = { ...baseItem, ...diamondDetails };
           }
@@ -317,7 +317,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
         .from("item_live_status")
         .select("status,total_on_jobs,assignments")
         .eq("item_uid", uid)
-        .single();
+        .maybeSingle();
       setLive(ls || null);
 
       // 3) If we have assignments, fetch manifest meta (job name & van reg) for pretty links
@@ -809,6 +809,11 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
           >
             Reprint Label
           </Button>
+          {item?.classification?.toUpperCase() === "KIT" ? (
+            <Link href={`/inventory/kits/${encodeURIComponent(item.uid)}`}>
+              <Button variant="secondary">Go to kit view</Button>
+            </Link>
+          ) : null}
           {isAdmin && item ? (
             <Button
               variant="destructive"

@@ -265,7 +265,6 @@ export default function KitsPage() {
   }
 
   async function createInventoryKitItem() {
-    if (!selectedKitId) return;
     const qty = Math.max(1, Number(kitInventoryQty) || 1);
     setCreatingInventoryItem(true);
     try {

@@ -490,6 +490,10 @@ export default function InventoryPage() {
               const needsMaintenance = showConditionStyling && meta?.value === "needs_service";
               const isGood = showConditionStyling && meta?.value === "good";
               const key = i.id ? `${i.source_table || "unknown"}:${i.id}` : `uid:${i.uid}`;
+              const viewHref =
+                (i.classification || "").toUpperCase() === "KIT"
+                  ? `/inventory/kits/${encodeURIComponent(i.uid)}`
+                  : `/inventory/${encodeURIComponent(i.uid)}`;
               const cardClass = needsRepair
                 ? "border-red-200 bg-red-50 dark:bg-red-900/30 dark:border-red-600"
                 : needsMaintenance
@@ -585,7 +589,7 @@ export default function InventoryPage() {
                   );
                 })()}
                 <div className="mt-2">
-                  <Link href={`/inventory/${encodeURIComponent(i.uid)}`}>
+                  <Link href={viewHref}>
                     <Button size="sm" variant="outline">
                       View
                     </Button>
@@ -613,18 +617,23 @@ export default function InventoryPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((i) => (
-                    <tr
-                      key={i.id ? `${i.source_table || "unknown"}:${i.id}` : `uid:${i.uid}`}
-                      className={`border-b last:border-0 dark:border-neutral-800 ${(() => {
-                        if (!showConditionStyling) return "";
-                        const meta = getConditionMeta(i.condition);
-                        if (meta?.value === "broken") return "bg-red-50 dark:bg-red-900/30";
-                        if (meta?.value === "needs_service") return "bg-amber-50 dark:bg-amber-900/30";
-                        if (meta?.value === "good") return "bg-green-50 dark:bg-green-900/20";
-                        return "";
-                      })()}`}
-                    >
+                  {filtered.map((i) => {
+                    const viewHref =
+                      (i.classification || "").toUpperCase() === "KIT"
+                        ? `/inventory/kits/${encodeURIComponent(i.uid)}`
+                        : `/inventory/${encodeURIComponent(i.uid)}`;
+                    return (
+                      <tr
+                        key={i.id ? `${i.source_table || "unknown"}:${i.id}` : `uid:${i.uid}`}
+                        className={`border-b last:border-0 dark:border-neutral-800 ${(() => {
+                          if (!showConditionStyling) return "";
+                          const meta = getConditionMeta(i.condition);
+                          if (meta?.value === "broken") return "bg-red-50 dark:bg-red-900/30";
+                          if (meta?.value === "needs_service") return "bg-amber-50 dark:bg-amber-900/30";
+                          if (meta?.value === "good") return "bg-green-50 dark:bg-green-900/20";
+                          return "";
+                        })()}`}
+                      >
                       <td className="py-2 pr-3">
                         <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-100 border">
                           {i.photo_url ? (
@@ -698,12 +707,13 @@ export default function InventoryPage() {
                         })()}
                       </td>
                       <td className="py-2 pr-3">
-                        <Link href={`/inventory/${encodeURIComponent(i.uid)}`}>
+                        <Link href={viewHref}>
                           <Button size="sm" variant="outline">View</Button>
                         </Link>
                       </td>
                     </tr>
-                  ))}
+                  );
+                })}
                 </tbody>
               </table>
             </div>

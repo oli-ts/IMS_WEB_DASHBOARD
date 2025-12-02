@@ -12,6 +12,10 @@ function normalizeBase(str) {
   return (str || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase() || "KIT";
 }
 
+function isUuid(str) {
+  return typeof str === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+}
+
 async function ensureUid(sb, base) {
   const candidates = [base, `${base}-${Math.floor(Math.random() * 900 + 100)}`];
   for (const uid of candidates) {
@@ -30,9 +34,10 @@ async function ensureUid(sb, base) {
 export async function POST(req) {
   try {
     const body = await req.json().catch(() => ({}));
-    const kitId = body?.kitId;
+    const kitId = typeof body?.kitId === "string" ? body.kitId.trim() : body?.kitId ? String(body.kitId) : "";
     const qty = Math.max(1, Number(body?.quantity) || 1);
     if (!kitId) return json(400, { error: "kitId is required" });
+    if (!isUuid(kitId)) return json(400, { error: "kitId must be a UUID" });
 
     const sb = supabaseAdmin();
     const { data: kit, error: kitErr } = await sb
@@ -45,11 +50,11 @@ export async function POST(req) {
 
     const baseUid = `KIT-${normalizeBase(kit.id || kitId)}`;
     const uid = await ensureUid(sb, baseUid);
+    const kitKey = kit?.id || kitId;
 
-    const kitIdNumber = Number(kit.id ?? kitId);
     const payload = {
       uid,
-      kit_id: Number.isFinite(kitIdNumber) ? kitIdNumber : null,
+      kit_id: kitKey,
       name: kit.name || `Kit ${kitId}`,
       description: kit.description || null,
       classification: "KIT",

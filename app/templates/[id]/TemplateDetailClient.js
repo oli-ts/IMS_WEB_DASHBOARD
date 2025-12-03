@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader } from "../../../components/ui/card";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
+import { LiveStatusBadge } from "../../../components/live-status-badge";
+import { useLiveStatuses } from "../../../lib/hooks/useLiveStatuses";
 import { toast } from "sonner";
 
 const JOB_TYPES = [
@@ -23,8 +25,8 @@ export default function TemplateDetailClient({ templateId }) {
   const [template, setTemplate] = useState(null);
   const [rows, setRows] = useState([]);
   const [itemMetaByUid, setItemMetaByUid] = useState({});
+  const [statusByUid, setStatusByUid] = useState({});
   const [inv, setInv] = useState([]);
-  const [kitResults, setKitResults] = useState([]);
   const [groupSearchResults, setGroupSearchResults] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
@@ -35,6 +37,15 @@ export default function TemplateDetailClient({ templateId }) {
   const [zones, setZones] = useState([]);
   const [bays, setBays] = useState([]);
   const [shelfs, setShelfs] = useState([]);
+
+  // Live statuses pulled from item_live_status to mirror inventory page behaviour.
+  const templateUids = useMemo(() => rows.map((r) => r.item_uid).filter(Boolean), [rows]);
+  const searchUids = useMemo(() => inv.map((i) => i.uid).filter(Boolean), [inv]);
+  const allStatusUids = useMemo(
+    () => Array.from(new Set([...templateUids, ...searchUids])),
+    [templateUids, searchUids]
+  );
+  const { liveMap } = useLiveStatuses(allStatusUids);
 
   useEffect(() => {
     (async () => {
@@ -53,9 +64,9 @@ export default function TemplateDetailClient({ templateId }) {
         sb.from("bays").select("id,label").order("label"),
         sb.from("shelfs").select("id,label").order("label"),
       ]);
-      setZones((z || []).map(z => ({ value: z.id, label: z.name })));
-      setBays((b || []).map(b => ({ value: b.id, label: b.label })));
-      setShelfs((s || []).map(s => ({ value: s.id, label: s.label })));
+      setZones((z || []).map((z) => ({ value: z.id, label: z.name })));
+      setBays((b || []).map((b) => ({ value: b.id, label: b.label })));
+      setShelfs((s || []).map((s) => ({ value: s.id, label: s.label })));
 
       setLoading(false);
     })();
@@ -69,72 +80,130 @@ export default function TemplateDetailClient({ templateId }) {
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
     setRows(data || []);
-    const uids = Array.from(new Set((data || []).map(r => r.item_uid).filter(Boolean)));
-    if (uids.length) {
-      const { data: invMeta } = await sb
-        .from("inventory_union")
-        .select("uid,name,photo_url,classification")
-        .in("uid", uids);
-      const map = {};
-      (invMeta || []).forEach(i => {
-        map[i.uid] = {
-          name: i.name,
-          photo_url: i.photo_url,
-          classification: i.classification,
+    const uids = Array.from(new Set((data || []).map((r) => r.item_uid).filter(Boolean)));
+    if (!uids.length) {
+      setItemMetaByUid({});
+      setStatusByUid({});
+      return;
+    }
+
+    // Fetch live status and quantities from inventory union, falling back where possible.
+    const statusMap = await fetchStatuses(uids);
+    setStatusByUid(statusMap);
+
+    const { data: invMeta } = await sb
+      .from("inventory_union")
+      .select("uid,name,photo_url,classification,quantity_total,quantity_available,unit,status")
+      .in("uid", uids);
+    const map = {};
+    (invMeta || []).forEach((i) => {
+      map[i.uid] = {
+        name: i.name,
+        photo_url: i.photo_url,
+        classification: i.classification,
+        quantity_total: i.quantity_total,
+        quantity_available: i.quantity_available,
+        unit: i.unit,
+        status: i.status || statusMap[i.uid] || null,
+      };
+    });
+
+    let missing = uids.filter((uid) => !map[uid]);
+    if (missing.length) {
+      const { data: kitMeta } = await sb
+        .from("inventory_kits")
+        .select("uid,name,photo_url,classification,quantity_total,quantity_available,unit,status")
+        .in("uid", missing);
+      (kitMeta || []).forEach((k) => {
+        map[k.uid] = {
+          name: k.name,
+          photo_url: k.photo_url,
+          classification: k.classification || "KIT",
+          quantity_total: k.quantity_total,
+          quantity_available: k.quantity_available,
+          unit: k.unit,
+          status: k.status || statusMap[k.uid] || null,
         };
       });
-      const missing = uids.filter((uid) => !map[uid]);
-      if (missing.length) {
-        const { data: metalMeta } = await sb
-          .from("metal_diamonds")
-          .select("uid,name,photo_url,classification")
-          .in("uid", missing);
-        (metalMeta || []).forEach((m) => {
-          map[m.uid] = {
-            name: m.name,
-            photo_url: m.photo_url,
-            classification: m.classification || "METAL_DIAMOND",
-          };
-        });
-      }
-      const stillMissing = uids.filter((uid) => !map[uid]);
-      if (stillMissing.length) {
-        const { data: regMeta } = await sb
-          .from("uid_registry")
-          .select("uid,name,photo_url,classification")
-          .in("uid", stillMissing);
-        (regMeta || []).forEach((r) => {
-          map[r.uid] = {
-            name: r.name,
-            photo_url: r.photo_url,
-            classification: r.classification || map[r.uid]?.classification || null,
-          };
-        });
-      }
-      setItemMetaByUid(map);
-    } else {
-      setItemMetaByUid({});
+      missing = uids.filter((uid) => !map[uid]);
     }
+
+    if (missing.length) {
+      const { data: metalMeta } = await sb
+        .from("metal_diamonds")
+        .select("uid,name,photo_url,classification,quantity_total,quantity_available,unit,status")
+        .in("uid", missing);
+      (metalMeta || []).forEach((m) => {
+        map[m.uid] = {
+          name: m.name,
+          photo_url: m.photo_url,
+          classification: m.classification || "METAL_DIAMOND",
+          quantity_total: m.quantity_total,
+          quantity_available: m.quantity_available,
+          unit: m.unit,
+          status: m.status || statusMap[m.uid] || null,
+        };
+      });
+      missing = uids.filter((uid) => !map[uid]);
+    }
+
+    if (missing.length) {
+      const { data: regMeta } = await sb
+        .from("uid_registry")
+        .select("uid,name,photo_url,classification,quantity_total,quantity_available,unit")
+        .in("uid", missing);
+      (regMeta || []).forEach((r) => {
+        map[r.uid] = {
+          name: r.name,
+          photo_url: r.photo_url,
+          classification: r.classification || map[r.uid]?.classification || null,
+          quantity_total: r.quantity_total,
+          quantity_available: r.quantity_available,
+          unit: r.unit,
+          status: statusMap[r.uid] || null,
+        };
+      });
+    }
+
+    setItemMetaByUid(map);
   }
 
   useEffect(() => {
     const run = async () => {
-      if (!q?.trim()) { setInv([]); setKitResults([]); setGroupSearchResults([]); return; }
-      let itemQuery = sb.from("inventory_union")
+      if (!q?.trim()) {
+        setInv([]);
+        setGroupSearchResults([]);
+        return;
+      }
+      let itemQuery = sb
+        .from("inventory_union")
         .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
         .ilike("name", `%${q}%`)
         .limit(25);
-      let metalQuery = sb.from("metal_diamonds")
+      let metalQuery = sb
+        .from("metal_diamonds")
         .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
+        .ilike("name", `%${q}%`)
+        .limit(25);
+      let kitQuery = sb
+        .from("inventory_kits")
+        .select("uid,name,classification,photo_url,status,quantity_total,quantity_available,unit")
         .ilike("name", `%${q}%`)
         .limit(25);
       if (/^[A-Z]{2,5}-/.test(q.trim().toUpperCase())) {
-        itemQuery = sb.from("inventory_union")
+        itemQuery = sb
+          .from("inventory_union")
           .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
           .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
           .limit(25);
-        metalQuery = sb.from("metal_diamonds")
+        metalQuery = sb
+          .from("metal_diamonds")
           .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
+          .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
+          .limit(25);
+        kitQuery = sb
+          .from("inventory_kits")
+          .select("uid,name,classification,photo_url,status,quantity_total,quantity_available,unit")
           .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
           .limit(25);
       }
@@ -143,12 +212,7 @@ export default function TemplateDetailClient({ templateId }) {
         .select("id,name")
         .ilike("name", `%${q}%`)
         .limit(10);
-      const [itemRes, metalRes, groupRes, kitsRes] = await Promise.all([
-        itemQuery,
-        metalQuery,
-        groupQuery,
-        fetch(`/api/kits/search?q=${encodeURIComponent(q)}`)
-      ]);
+      const [itemRes, metalRes, kitRes, groupRes] = await Promise.all([itemQuery, metalQuery, kitQuery, groupQuery]);
       if (itemRes?.error) {
         console.error("Inventory search failed", itemRes.error);
       }
@@ -169,17 +233,21 @@ export default function TemplateDetailClient({ templateId }) {
           merged.push(normalized);
         }
       }
+      for (const k of kitRes?.data || []) {
+        if (!k?.uid) continue;
+        const normalized = { ...k, classification: k.classification || "KIT" };
+        const idx = merged.findIndex((r) => r.uid === normalized.uid);
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], ...normalized };
+        } else {
+          merged.push(normalized);
+        }
+      }
       setInv(merged);
       if (groupRes?.error) {
         console.error("Group search failed", groupRes.error);
       }
       setGroupSearchResults(groupRes?.data || []);
-      if (kitsRes.ok) {
-        const payload = await kitsRes.json().catch(() => ({}));
-        setKitResults(payload?.data || []);
-      } else {
-        setKitResults([]);
-      }
     };
     const t = setTimeout(run, 250);
     return () => clearTimeout(t);
@@ -291,9 +359,7 @@ export default function TemplateDetailClient({ templateId }) {
     try {
       const existingSet = new Set(rows.map((r) => r.item_uid));
       existingSet.add(baseUid);
-      const extras = (await getAvailableGroupUids(meta.group_id)).filter(
-        (uid) => uid && !existingSet.has(uid)
-      );
+      const extras = (await getAvailableGroupUids(meta.group_id)).filter((uid) => uid && !existingSet.has(uid));
       if (!extras.length) return;
       const statusMap = await fetchStatuses(extras);
       const allowed = extras.filter((uid) => (statusMap[uid] || "").toLowerCase() !== "broken");
@@ -320,19 +386,13 @@ export default function TemplateDetailClient({ templateId }) {
     if (!uids?.length) return {};
     try {
       const map = {};
-      const { data: inv } = await sb
-        .from("inventory_union")
-        .select("uid,status")
-        .in("uid", uids);
+      const { data: inv } = await sb.from("inventory_union").select("uid,status").in("uid", uids);
       for (const row of inv || []) {
         map[row.uid] = row.status || null;
       }
       const missing = uids.filter((uid) => !map[uid]);
       if (missing.length) {
-        const { data: metal } = await sb
-          .from("metal_diamonds")
-          .select("uid,status")
-          .in("uid", missing);
+        const { data: metal } = await sb.from("metal_diamonds").select("uid,status").in("uid", missing);
         for (const row of metal || []) {
           map[row.uid] = row.status || null;
         }
@@ -351,9 +411,7 @@ export default function TemplateDetailClient({ templateId }) {
       if (!pool.length) return toast.error(`No available items in ${groupName}`);
       const statusMap = await fetchStatuses(pool);
       const existing = new Set(rows.map((r) => r.item_uid));
-      const filtered = pool.filter(
-        (uid) => !existing.has(uid) && (statusMap[uid] || "").toLowerCase() !== "broken"
-      );
+      const filtered = pool.filter((uid) => !existing.has(uid) && (statusMap[uid] || "").toLowerCase() !== "broken");
       if (!filtered.length) {
         toast.error(`No usable items in ${groupName}`);
         return;
@@ -404,23 +462,6 @@ export default function TemplateDetailClient({ templateId }) {
     }
   }
 
-  async function addKitToTemplate(kitId) {
-    try {
-      const { data, error } = await sb
-        .from("kit_items")
-        .select("item_uid,quantity")
-        .eq("kit_id", kitId);
-      if (error) throw error;
-      for (const row of data || []) {
-        await addItemToTemplate(row.item_uid, row.quantity || 1, { skipGroupCascade: true });
-      }
-      toast.success("Kit added");
-    } catch (err) {
-      console.error(err);
-      toast.error(err.message || "Failed to add kit");
-    }
-  }
-
   const totalLines = rows.length;
   const totalQty = useMemo(() => rows.reduce((a, r) => a + Number(r.qty_required || 0), 0), [rows]);
 
@@ -438,7 +479,9 @@ export default function TemplateDetailClient({ templateId }) {
           <Link href={`/manifests/new?templateId=${templateId}`}>
             <Button variant="outline">Create Manifest from Template</Button>
           </Link>
-          <Link href="/templates" className="underline">Back</Link>
+          <Link href="/templates" className="underline">
+            Back
+          </Link>
         </div>
       </div>
 
@@ -448,46 +491,50 @@ export default function TemplateDetailClient({ templateId }) {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-1 md:col-span-2">
               <div className="text-sm text-neutral-500">Template name</div>
-              <Input value={template?.name || ""} onChange={e=>setTemplate(t=>({ ...(t||{}), name: e.target.value }))} />
+              <Input value={template?.name || ""} onChange={(e) => setTemplate((t) => ({ ...(t || {}), name: e.target.value }))} />
             </div>
             <div className="space-y-1">
               <div className="text-sm text-neutral-500">Type of job</div>
               <Select
                 items={JOB_TYPES}
-                triggerLabel={JOB_TYPES.find(x=>x.value===template?.job_type)?.label || "Select job type"}
-                onSelect={(v)=>setTemplate(t=>({ ...(t||{}), job_type: v?.value || null }))}
+                triggerLabel={JOB_TYPES.find((x) => x.value === template?.job_type)?.label || "Select job type"}
+                onSelect={(v) => setTemplate((t) => ({ ...(t || {}), job_type: v?.value || null }))}
               />
             </div>
             <div className="space-y-1">
               <div className="text-sm text-neutral-500">Type of finish</div>
-              <Input value={template?.finish_type || ""} onChange={e=>setTemplate(t=>({ ...(t||{}), finish_type: e.target.value }))} />
+              <Input value={template?.finish_type || ""} onChange={(e) => setTemplate((t) => ({ ...(t || {}), finish_type: e.target.value }))} />
             </div>
             <div className="space-y-1">
               <div className="text-sm text-neutral-500">Colour</div>
-              <Input value={template?.colour || ""} onChange={e=>setTemplate(t=>({ ...(t||{}), colour: e.target.value }))} />
+              <Input value={template?.colour || ""} onChange={(e) => setTemplate((t) => ({ ...(t || {}), colour: e.target.value }))} />
             </div>
             <div className="space-y-1">
               <div className="text-sm text-neutral-500">Size (multiplier)</div>
-              <Input type="number" step="0.01" value={template?.size_multiplier ?? ""} onChange={e=>setTemplate(t=>({ ...(t||{}), size_multiplier: e.target.value }))} />
+              <Input type="number" step="0.01" value={template?.size_multiplier ?? ""} onChange={(e) => setTemplate((t) => ({ ...(t || {}), size_multiplier: e.target.value }))} />
             </div>
             <div className="md:col-span-2 flex justify-end">
-              <Button onClick={async()=>{
-                try {
-                  const patch = {
-                    name: (template?.name || "").trim() || null,
-                    job_type: template?.job_type || null,
-                    finish_type: template?.finish_type || null,
-                    colour: template?.colour || null,
-                    size_multiplier: (template?.size_multiplier === "" ? null : Number(template?.size_multiplier)),
-                  };
-                  const { error } = await sb.from("manifest_templates").update(patch).eq("id", templateId);
-                  if (error) throw error;
-                  toast.success("Template updated");
-                } catch (err) {
-                  console.error(err);
-                  toast.error(err.message || "Update failed");
-                }
-              }}>Save</Button>
+              <Button
+                onClick={async () => {
+                  try {
+                    const patch = {
+                      name: (template?.name || "").trim() || null,
+                      job_type: template?.job_type || null,
+                      finish_type: template?.finish_type || null,
+                      colour: template?.colour || null,
+                      size_multiplier: template?.size_multiplier === "" ? null : Number(template?.size_multiplier),
+                    };
+                    const { error } = await sb.from("manifest_templates").update(patch).eq("id", templateId);
+                    if (error) throw error;
+                    toast.success("Template updated");
+                  } catch (err) {
+                    console.error(err);
+                    toast.error(err.message || "Update failed");
+                  }
+                }}
+              >
+                Save
+              </Button>
             </div>
           </div>
         </CardContent>
@@ -499,88 +546,144 @@ export default function TemplateDetailClient({ templateId }) {
         <CardContent>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-3">
-              <Input className="h-9" placeholder="Search inventory by name or UID" value={q} onChange={e=>setQ(e.target.value)} />
+              <Input className="h-9" placeholder="Search inventory by name or UID" value={q} onChange={(e) => setQ(e.target.value)} />
               <div className="grid gap-2 max-h-[420px] overflow-auto">
-                {kitResults.map(k => (
-                  <div key={k.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
-                    <div>
-                      <div className="font-medium">{k.name}</div>
-                      <div className="text-xs text-neutral-500">Kit · {k.item_count || 0} items</div>
-                      {k.description ? <div className="text-xs text-neutral-500 mt-1">{k.description}</div> : null}
-                    </div>
-                  <Button size="sm" variant="outline" onClick={()=>addKitToTemplate(k.id)}>Add Kit</Button>
-                </div>
-              ))}
                 {groupSearchResults.map((g) => (
                   <div key={g.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
                     <div>
                       <div className="font-medium">Any {g.name}</div>
                       <div className="text-xs text-neutral-500">Pick a random available member of this group.</div>
                     </div>
-                    <Button size="sm" onClick={() => addGroupPlaceholder(g.id, g.name)}>Add Any</Button>
+                    <Button size="sm" onClick={() => addGroupPlaceholder(g.id, g.name)}>
+                      Add Any
+                    </Button>
                   </div>
                 ))}
-                {inv.map(i => (
-                  <div key={i.uid} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer"
-                        onClick={() => i.photo_url && setImagePreview({ src: i.photo_url, alt: i.name || i.uid })}
-                      >
-                        {i.photo_url ? (
-                          <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
-                        )}
-                      </div>
-                      <div>
-                        <div className="font-medium">{i.name}</div>
-                        <div className="text-xs text-neutral-500">{i.uid} · {i.classification}</div>
-                        {groupMetaByUid[i.uid]?.group_name ? (
-                          <div className="text-xs text-blue-600 mt-1">Group: {groupMetaByUid[i.uid].group_name}</div>
-                        ) : null}
-                      </div>
-                    </div>
-                    <AddInline uid={i.uid} onAdd={addItemToTemplate} />
-                  </div>
-                ))}
-                {q && inv.length === 0 && kitResults.length === 0 && <div className="text-sm text-neutral-500">No matches.</div>}
-              </div>
-            </div>
-
-            {/* Current template lines */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="font-semibold">Template Items</div>
-              <div className="text-sm text-neutral-500">{totalLines} lines · {totalQty} total qty</div>
-              </div>
-              <div className="grid gap-2 max-h-[420px] overflow-auto">
-                {rows.map(r => (
-                  <div key={r.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800">
-                    <div className="flex items-center justify-between gap-3">
+                {inv.map((i) => {
+                  const total = typeof i.quantity_total === "number" ? i.quantity_total : null;
+                  const baseAvailable = typeof i.quantity_available === "number" ? i.quantity_available : null;
+                  const onJobs = typeof liveMap[i.uid]?.total_on_jobs === "number" ? liveMap[i.uid].total_on_jobs : 0;
+                  const unit = i.unit || (baseAvailable !== null || total !== null ? "pcs" : "");
+                  const unitLabel = unit ? ` ${unit}` : "";
+                  const status = String(liveMap[i.uid]?.status || i.status || "in_warehouse").toLowerCase();
+                  const available =
+                    total !== null
+                      ? Math.max(total - onJobs, 0)
+                      : baseAvailable !== null
+                      ? Math.max(baseAvailable - onJobs, 0)
+                      : null;
+                  const rowClass = "p-3 rounded-xl border flex items-center justify-between bg-white dark:bg-neutral-900 dark:border-neutral-800";
+                  const imgClass = "h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer";
+                  return (
+                    <div key={i.uid} className={rowClass}>
                       <div className="flex items-center gap-3">
                         <div
-                          className="h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer"
-                          onClick={() => itemMetaByUid[r.item_uid]?.photo_url && setImagePreview({ src: itemMetaByUid[r.item_uid].photo_url, alt: itemMetaByUid[r.item_uid].name || r.item_uid })}
+                          className={imgClass}
+                          onClick={() => i.photo_url && setImagePreview({ src: i.photo_url, alt: i.name || i.uid })}
                         >
-                          {itemMetaByUid[r.item_uid]?.photo_url ? (
-                            <img src={itemMetaByUid[r.item_uid].photo_url} alt="" className="h-full w-full object-cover" />
+                          {i.photo_url ? (
+                            <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
                           ) : (
                             <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
                           )}
                         </div>
                         <div>
-                          <div className="font-medium">{itemMetaByUid[r.item_uid]?.name || r.item_uid}</div>
-                          <div className="text-xs text-neutral-500">{r.item_uid}</div>
+                          <div className="font-medium">{i.name}</div>
+                          <div className="text-xs text-neutral-500">
+                            {i.uid} · {i.classification}
+                          </div>
+                          <div className="text-xs mt-1 flex items-center gap-2">
+                            <span>Status:</span> <LiveStatusBadge status={status || "in_warehouse"} />
+                          </div>
+                          {(available !== null || total !== null) && (
+                            <div className="text-xs mt-1 text-neutral-500">
+                              Available: {available !== null ? available : "-"}
+                              {unitLabel}
+                              {total !== null ? ` / ${total}${unitLabel}` : ""}
+                              {onJobs ? ` (on job: ${onJobs})` : ""}
+                            </div>
+                          )}
+                          {groupMetaByUid[i.uid]?.group_name ? (
+                            <div className="text-xs text-blue-600 mt-1">Group: {groupMetaByUid[i.uid].group_name}</div>
+                          ) : null}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <QtyEditor value={r.qty_required} onChange={v=>updateQty(r.id, v)} />
-                        <Button size="sm" variant="outline" onClick={()=>removeLine(r.id)}>Remove</Button>
+                      <AddInline uid={i.uid} onAdd={addItemToTemplate} />
+                    </div>
+                  );
+                })}
+                {q && inv.length === 0 && <div className="text-sm text-neutral-500">No matches.</div>}
+              </div>
+            </div>
+
+            {/* Current template lines */}
+            <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                <div className="font-semibold">Template Items</div>
+                <div className="text-sm text-neutral-500">
+                  {totalLines} lines · {totalQty} total qty
+                </div>
+              </div>
+              <div className="grid gap-2 max-h-[420px] overflow-auto">
+                {rows.map((r) => {
+                  const meta = itemMetaByUid[r.item_uid] || {};
+                  const total = typeof meta.quantity_total === "number" ? meta.quantity_total : null;
+                  const baseAvailable = typeof meta.quantity_available === "number" ? meta.quantity_available : null;
+                  const onJobs = typeof liveMap[r.item_uid]?.total_on_jobs === "number" ? liveMap[r.item_uid].total_on_jobs : 0;
+                  const unit = meta.unit || (baseAvailable !== null || total !== null ? "pcs" : "");
+                  const unitLabel = unit ? ` ${unit}` : "";
+                  const status = String(liveMap[r.item_uid]?.status || statusByUid[r.item_uid] || "in_warehouse").toLowerCase();
+                  const available =
+                    total !== null
+                      ? Math.max(total - onJobs, 0)
+                      : baseAvailable !== null
+                      ? Math.max(baseAvailable - onJobs, 0)
+                      : null;
+                  const rowClass = "p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800";
+                  const imgClass = "h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer";
+                  return (
+                    <div key={r.id} className={rowClass}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={imgClass}
+                            onClick={() =>
+                              itemMetaByUid[r.item_uid]?.photo_url &&
+                              setImagePreview({ src: itemMetaByUid[r.item_uid].photo_url, alt: itemMetaByUid[r.item_uid].name || r.item_uid })
+                            }
+                          >
+                            {itemMetaByUid[r.item_uid]?.photo_url ? (
+                              <img src={itemMetaByUid[r.item_uid].photo_url} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="font-medium">{itemMetaByUid[r.item_uid]?.name || r.item_uid}</div>
+                            <div className="text-xs text-neutral-500">{r.item_uid}</div>
+                            <div className="text-xs mt-1 flex items-center gap-2">
+                              <span>Status:</span> <LiveStatusBadge status={status || "in_warehouse"} />
+                            </div>
+                            {(available !== null || total !== null) && (
+                              <div className="text-xs mt-1 text-neutral-500">
+                                Available: {available !== null ? available : "-"}
+                                {unitLabel}
+                                {total !== null ? ` / ${total}${unitLabel}` : ""}
+                                {onJobs ? ` (on job: ${onJobs})` : ""}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <QtyEditor value={r.qty_required} onChange={(v) => updateQty(r.id, v)} />
+                          <Button size="sm" variant="outline" onClick={() => removeLine(r.id)}>
+                            Remove
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {rows.length === 0 && <div className="text-sm text-neutral-500">No items yet — search on the left to add.</div>}
               </div>
             </div>
@@ -598,11 +701,7 @@ export default function TemplateDetailClient({ templateId }) {
               ✕
             </button>
             <div className="w-full">
-              <img
-                src={imagePreview.src}
-                alt={imagePreview.alt || "Preview"}
-                className="w-full h-auto object-contain max-h-[80vh] rounded-xl"
-              />
+              <img src={imagePreview.src} alt={imagePreview.alt || "Preview"} className="w-full h-auto object-contain max-h-[80vh] rounded-xl" />
             </div>
           </div>
         </div>
@@ -615,18 +714,22 @@ function AddInline({ uid, onAdd }) {
   const [qty, setQty] = useState("1");
   return (
     <div className="flex items-center gap-2">
-      <Input type="number" min="0" className="w-20 h-9" value={qty} onChange={e=>setQty(e.target.value)} />
-      <Button size="sm" onClick={()=>onAdd(uid, qty)}>Add</Button>
+      <Input type="number" min="0" className="w-20 h-9" value={qty} onChange={(e) => setQty(e.target.value)} />
+      <Button size="sm" onClick={() => onAdd(uid, qty)}>
+        Add
+      </Button>
     </div>
   );
 }
 
 function QtyEditor({ value, onChange }) {
   const [v, setV] = useState(String(value ?? 0));
-  useEffect(()=>{ setV(String(value ?? 0)); }, [value]);
+  useEffect(() => {
+    setV(String(value ?? 0));
+  }, [value]);
   return (
     <div className="flex items-center gap-2">
-      <Input type="number" min="0" className="w-24 h-9" value={v} onChange={e=>setV(e.target.value)} onBlur={()=>onChange(v)} />
+      <Input type="number" min="0" className="w-24 h-9" value={v} onChange={(e) => setV(e.target.value)} onBlur={() => onChange(v)} />
     </div>
   );
 }

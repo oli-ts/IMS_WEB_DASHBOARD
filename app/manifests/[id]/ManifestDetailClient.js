@@ -53,7 +53,28 @@ export default function ManifestDetailClient({ manifestId }) {
         .select("uid,name,photo_url,zone_id,bay_id,shelf_id,quantity_total,quantity_available,unit,classification")
         .in("uid", uids);
       metaMap = Object.fromEntries((inv || []).map(r => [r.uid, r]));
-      const missingAfterInv = uids.filter((u) => !metaMap[u]);
+      let missingAfterInv = uids.filter((u) => !metaMap[u]);
+      if (missingAfterInv.length) {
+        const { data: kits } = await sb
+          .from("inventory_kits")
+          .select("uid,name,photo_url,zone_id,bay_id,shelf_id,quantity_total,quantity_available,unit,classification")
+          .in("uid", missingAfterInv);
+        (kits || []).forEach((r) => {
+          metaMap[r.uid] = {
+            uid: r.uid,
+            name: r.name,
+            photo_url: r.photo_url,
+            zone_id: r.zone_id,
+            bay_id: r.bay_id,
+            shelf_id: r.shelf_id,
+            quantity_total: r.quantity_total,
+            quantity_available: r.quantity_available,
+            unit: r.unit,
+            classification: r.classification || "KIT",
+          };
+        });
+        missingAfterInv = uids.filter((u) => !metaMap[u]);
+      }
       if (missingAfterInv.length) {
         const { data: acc } = await sb
           .from("accessories")
@@ -146,7 +167,6 @@ export default function ManifestDetailClient({ manifestId }) {
   // Search inventory to add
   const [q, setQ] = useState("");
   const [inv, setInv] = useState([]);
-  const [kitResults, setKitResults] = useState([]);
   const [dupMap, setDupMap] = useState({});
   const [groupRows, setGroupRows] = useState([]);
   const [groupSearchResults, setGroupSearchResults] = useState([]);
@@ -154,13 +174,17 @@ export default function ManifestDetailClient({ manifestId }) {
   const [imagePreview, setImagePreview] = useState(null); // { src, alt }
   useEffect(() => {
     const run = async () => {
-      if (!q?.trim()) { setInv([]); setKitResults([]); setGroupSearchResults([]); return; }
+      if (!q?.trim()) { setInv([]); setGroupSearchResults([]); return; }
       let itemQuery = sb.from("inventory_union")
         .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
         .ilike("name", `%${q}%`)
         .limit(25);
       let metalQuery = sb.from("metal_diamonds")
         .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
+        .ilike("name", `%${q}%`)
+        .limit(25);
+      let kitQuery = sb.from("inventory_kits")
+        .select("uid,name,classification,photo_url,status,quantity_total,quantity_available,unit")
         .ilike("name", `%${q}%`)
         .limit(25);
       if (/^[A-Z]{2,5}-/.test(q.trim().toUpperCase())) {
@@ -172,17 +196,21 @@ export default function ManifestDetailClient({ manifestId }) {
           .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
           .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
           .limit(25);
+        kitQuery = sb.from("inventory_kits")
+          .select("uid,name,classification,photo_url,status,quantity_total,quantity_available,unit")
+          .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
+          .limit(25);
       }
       const groupQuery = sb
         .from("item_groups")
         .select("id,name")
         .ilike("name", `%${q}%`)
         .limit(10);
-      const [itemRes, metalRes, groupRes, kitsRes] = await Promise.all([
+      const [itemRes, metalRes, kitRes, groupRes] = await Promise.all([
         itemQuery,
         metalQuery,
-        groupQuery,
-        fetch(`/api/kits/search?q=${encodeURIComponent(q)}`)
+        kitQuery,
+        groupQuery
       ]);
       if (itemRes?.error) {
         console.error("Inventory search failed", itemRes.error);
@@ -204,17 +232,21 @@ export default function ManifestDetailClient({ manifestId }) {
           merged.push(normalized);
         }
       }
+      for (const k of kitRes?.data || []) {
+        if (!k?.uid) continue;
+        const normalized = { ...k, classification: k.classification || "KIT" };
+        const existingIndex = merged.findIndex((r) => r.uid === normalized.uid);
+        if (existingIndex >= 0) {
+          merged[existingIndex] = { ...merged[existingIndex], ...normalized };
+        } else {
+          merged.push(normalized);
+        }
+      }
       setInv(merged);
       if (groupRes?.error) {
         console.error("Group search failed", groupRes.error);
       }
       setGroupSearchResults(groupRes?.data || []);
-      if (kitsRes.ok) {
-        const payload = await kitsRes.json().catch(() => ({}));
-        setKitResults(payload?.data || []);
-      } else {
-        setKitResults([]);
-      }
     };
     const t = setTimeout(run, 250);
     return () => clearTimeout(t);
@@ -499,23 +531,6 @@ export default function ManifestDetailClient({ manifestId }) {
     await loadItems();
   }
 
-  async function addKitToManifest(kitId) {
-    try {
-      const { data, error } = await sb
-        .from("kit_items")
-        .select("item_uid,quantity")
-        .eq("kit_id", kitId);
-      if (error) throw error;
-      for (const row of data || []) {
-        await addItemToManifest(row.item_uid, row.quantity || 1, { skipGroupCascade: true });
-      }
-      toast.success("Kit added");
-    } catch (err) {
-      console.error(err);
-      toast.error(err.message || "Failed to add kit");
-    }
-  }
-
   const totals = useMemo(
     () =>
       items.reduce(
@@ -576,20 +591,6 @@ export default function ManifestDetailClient({ manifestId }) {
         <div className="font-semibold">Add Items</div>
         <Input className="h-9 max-w-md" placeholder="Search inventory by name or UID" value={q} onChange={e=>setQ(e.target.value)} />
         <div className="grid gap-2 max-h-[420px] overflow-auto">
-          {kitResults.map(k => (
-            <div key={k.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
-              <div>
-                <div className="font-medium">{k.name}</div>
-                <div className="text-xs text-neutral-500">
-                  Kit · {k.item_count || 0} items
-                </div>
-                {k.description ? (
-                  <div className="text-xs text-neutral-500 mt-1">{k.description}</div>
-                ) : null}
-              </div>
-              <Button size="sm" variant="outline" onClick={() => addKitToManifest(k.id)}>Add Kit</Button>
-            </div>
-          ))}
           {groupSearchResults.map((g) => (
             <div key={g.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
               <div>

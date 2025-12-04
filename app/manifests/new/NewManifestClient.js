@@ -64,6 +64,68 @@ export default function NewManifestClient({ initial }) {
     })();
   }, [sb, initial]);
 
+  useEffect(() => {
+    let active = true;
+    if (!draftSearch?.trim()) {
+      setDraftResults([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const term = draftSearch.trim();
+        const normalized = term.replace(/\s+/g, "");
+        const likeTerm = `%${term}%`;
+        const likeNorm = `%${normalized}%`;
+        const orClause = [
+          `name.ilike.${likeTerm}`,
+          `uid.ilike.${likeTerm}`,
+          `replace(name,' ','')ilike.${likeNorm}`,
+          `replace(uid,' ','')ilike.${likeNorm}`,
+        ].join(",");
+        let invQuery = sb
+          .from("inventory_union")
+          .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
+          .or(orClause)
+          .limit(20);
+        let metalQuery = sb
+          .from("metal_diamonds")
+          .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
+          .or(orClause)
+          .limit(20);
+        if (/^[A-Z]{2,5}-/.test(term.toUpperCase())) {
+          invQuery = sb
+            .from("inventory_union")
+            .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
+            .or(`uid.ilike.%${term}%,name.ilike.%${term}%,uid.ilike.%${normalized}%,name.ilike.%${normalized}%`)
+            .limit(20);
+          metalQuery = sb
+            .from("metal_diamonds")
+            .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
+            .or(`uid.ilike.%${term}%,name.ilike.%${term}%,uid.ilike.%${normalized}%,name.ilike.%${normalized}%`)
+            .limit(20);
+        }
+        const [invRes, metalRes] = await Promise.all([invQuery, metalQuery]);
+        if (!active) return;
+        const merged = [...(invRes?.data || [])];
+        for (const row of metalRes?.data || []) {
+          if (!row?.uid) continue;
+          const normalizedRow = { ...row, classification: row.classification || "METAL_DIAMOND" };
+          const idx = merged.findIndex((i) => i.uid === normalizedRow.uid);
+          if (idx >= 0) merged[idx] = { ...merged[idx], ...normalizedRow };
+          else merged.push(normalizedRow);
+        }
+        setDraftResults(merged);
+      } catch (err) {
+        console.warn("[new manifest] draft search failed", err?.message || err);
+        if (active) setDraftResults([]);
+      }
+    }, 200);
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [draftSearch, sb]);
+
   function validate() {
     const e = {};
     if (!isInternal && !job?.value) e.job = "Job is required";
@@ -82,59 +144,6 @@ export default function NewManifestClient({ initial }) {
       { k: "Items", v: draftLines.length ? `${draftLines.length} selected` : "Add items below" },
     ];
   }, [template, job, van, isInternal, staff, draftLines.length]);
-
-  useEffect(() => {
-    let active = true;
-    if (!draftSearch?.trim()) {
-      setDraftResults([]);
-      return;
-    }
-    const t = setTimeout(async () => {
-      try {
-        const term = draftSearch.trim();
-        let invQuery = sb
-          .from("inventory_union")
-          .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
-          .ilike("name", `%${term}%`)
-          .limit(20);
-        let metalQuery = sb
-          .from("metal_diamonds")
-          .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
-          .ilike("name", `%${term}%`)
-          .limit(20);
-        if (/^[A-Z]{2,5}-/.test(term.toUpperCase())) {
-          invQuery = sb
-            .from("inventory_union")
-            .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
-            .or(`uid.ilike.%${term}%,name.ilike.%${term}%`)
-            .limit(20);
-          metalQuery = sb
-            .from("metal_diamonds")
-            .select("uid,name,classification,photo_url,quantity_total,quantity_available,unit")
-            .or(`uid.ilike.%${term}%,name.ilike.%${term}%`)
-            .limit(20);
-        }
-        const [invRes, metalRes] = await Promise.all([invQuery, metalQuery]);
-        if (!active) return;
-        const merged = [...(invRes?.data || [])];
-        for (const row of metalRes?.data || []) {
-          if (!row?.uid) continue;
-          const normalized = { ...row, classification: row.classification || "METAL_DIAMOND" };
-          const idx = merged.findIndex((i) => i.uid === normalized.uid);
-          if (idx >= 0) merged[idx] = { ...merged[idx], ...normalized };
-          else merged.push(normalized);
-        }
-        setDraftResults(merged);
-      } catch (err) {
-        console.warn("[new manifest] draft search failed", err?.message || err);
-        if (active) setDraftResults([]);
-      }
-    }, 200);
-    return () => {
-      active = false;
-      clearTimeout(t);
-    };
-  }, [draftSearch, sb]);
 
   function addDraftLine(result) {
     const uid = result?.uid;

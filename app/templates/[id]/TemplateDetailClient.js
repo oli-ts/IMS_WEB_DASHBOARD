@@ -10,6 +10,7 @@ import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
 import { LiveStatusBadge } from "../../../components/live-status-badge";
 import { useLiveStatuses } from "../../../lib/hooks/useLiveStatuses";
+import ItemGroupQuickMenu from "@/components/item-group-quick-menu";
 import { toast } from "sonner";
 
 const JOB_TYPES = [
@@ -175,20 +176,30 @@ export default function TemplateDetailClient({ templateId }) {
         setGroupSearchResults([]);
         return;
       }
+      const term = q.trim();
+      const normalized = term.replace(/\s+/g, "");
+      const likeTerm = `%${term}%`;
+      const likeNorm = `%${normalized}%`;
+      const orClause = [
+        `name.ilike.${likeTerm}`,
+        `uid.ilike.${likeTerm}`,
+        `replace(name,' ','')ilike.${likeNorm}`,
+        `replace(uid,' ','')ilike.${likeNorm}`,
+      ].join(",");
       let itemQuery = sb
         .from("inventory_union")
         .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
-        .ilike("name", `%${q}%`)
+        .or(orClause)
         .limit(25);
       let metalQuery = sb
         .from("metal_diamonds")
         .select("uid,name,classification,brand,model,photo_url,status,quantity_total,quantity_available,unit")
-        .ilike("name", `%${q}%`)
+        .or(orClause)
         .limit(25);
       let kitQuery = sb
         .from("inventory_kits")
         .select("uid,name,classification,photo_url,status,quantity_total,quantity_available,unit")
-        .ilike("name", `%${q}%`)
+        .or(orClause)
         .limit(25);
       if (/^[A-Z]{2,5}-/.test(q.trim().toUpperCase())) {
         itemQuery = sb
@@ -204,7 +215,7 @@ export default function TemplateDetailClient({ templateId }) {
         kitQuery = sb
           .from("inventory_kits")
           .select("uid,name,classification,photo_url,status,quantity_total,quantity_available,unit")
-          .or(`uid.ilike.%${q}%,name.ilike.%${q}%`)
+          .or(`uid.ilike.%${q}%,name.ilike.%${q}%,uid.ilike.%${normalized}%,name.ilike.%${normalized}%`)
           .limit(25);
       }
       const groupQuery = sb
@@ -545,76 +556,11 @@ export default function TemplateDetailClient({ templateId }) {
         <CardHeader>Add Items from Inventory</CardHeader>
         <CardContent>
           <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-3">
-              <Input className="h-9" placeholder="Search inventory by name or UID" value={q} onChange={(e) => setQ(e.target.value)} />
-              <div className="grid gap-2 max-h-[420px] overflow-auto">
-                {groupSearchResults.map((g) => (
-                  <div key={g.id} className="p-3 rounded-xl border bg-white dark:bg-neutral-900 dark:border-neutral-800 flex items-center justify-between">
-                    <div>
-                      <div className="font-medium">Any {g.name}</div>
-                      <div className="text-xs text-neutral-500">Pick a random available member of this group.</div>
-                    </div>
-                    <Button size="sm" onClick={() => addGroupPlaceholder(g.id, g.name)}>
-                      Add Any
-                    </Button>
-                  </div>
-                ))}
-                {inv.map((i) => {
-                  const total = typeof i.quantity_total === "number" ? i.quantity_total : null;
-                  const baseAvailable = typeof i.quantity_available === "number" ? i.quantity_available : null;
-                  const onJobs = typeof liveMap[i.uid]?.total_on_jobs === "number" ? liveMap[i.uid].total_on_jobs : 0;
-                  const unit = i.unit || (baseAvailable !== null || total !== null ? "pcs" : "");
-                  const unitLabel = unit ? ` ${unit}` : "";
-                  const status = String(liveMap[i.uid]?.status || i.status || "in_warehouse").toLowerCase();
-                  const available =
-                    total !== null
-                      ? Math.max(total - onJobs, 0)
-                      : baseAvailable !== null
-                      ? Math.max(baseAvailable - onJobs, 0)
-                      : null;
-                  const rowClass = "p-3 rounded-xl border flex items-center justify-between bg-white dark:bg-neutral-900 dark:border-neutral-800";
-                  const imgClass = "h-12 w-12 aspect-square flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100 border dark:bg-neutral-800 dark:border-neutral-700 cursor-pointer";
-                  return (
-                    <div key={i.uid} className={rowClass}>
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={imgClass}
-                          onClick={() => i.photo_url && setImagePreview({ src: i.photo_url, alt: i.name || i.uid })}
-                        >
-                          {i.photo_url ? (
-                            <img src={i.photo_url} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">No image</div>
-                          )}
-                        </div>
-                        <div>
-                          <div className="font-medium">{i.name}</div>
-                          <div className="text-xs text-neutral-500">
-                            {i.uid} · {i.classification}
-                          </div>
-                          <div className="text-xs mt-1 flex items-center gap-2">
-                            <span>Status:</span> <LiveStatusBadge status={status || "in_warehouse"} />
-                          </div>
-                          {(available !== null || total !== null) && (
-                            <div className="text-xs mt-1 text-neutral-500">
-                              Available: {available !== null ? available : "-"}
-                              {unitLabel}
-                              {total !== null ? ` / ${total}${unitLabel}` : ""}
-                              {onJobs ? ` (on job: ${onJobs})` : ""}
-                            </div>
-                          )}
-                          {groupMetaByUid[i.uid]?.group_name ? (
-                            <div className="text-xs text-blue-600 mt-1">Group: {groupMetaByUid[i.uid].group_name}</div>
-                          ) : null}
-                        </div>
-                      </div>
-                      <AddInline uid={i.uid} onAdd={addItemToTemplate} />
-                    </div>
-                  );
-                })}
-                {q && inv.length === 0 && <div className="text-sm text-neutral-500">No matches.</div>}
+              <div className="space-y-3">
+                <ItemGroupQuickMenu
+                  onAddItem={(item) => addItemToTemplate(item.uid, 1, { skipGroupCascade: true })}
+                />
               </div>
-            </div>
 
             {/* Current template lines */}
             <div className="space-y-3">

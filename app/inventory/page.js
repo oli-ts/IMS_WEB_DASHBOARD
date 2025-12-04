@@ -113,6 +113,8 @@ export default function InventoryPage() {
     (async () => {
       try {
         const term = debouncedQ;
+        const normalized = term.replace(/\s+/g, "");
+        const spaced = `%${term.replace(/\s+/g, "%")}%`;
         const doSearch = Boolean(term);
         const baseSelect =
           "uid,name,brand,model,photo_url,classification,condition,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at";
@@ -125,8 +127,9 @@ export default function InventoryPage() {
           let query = sb.from("inventory_union").select(baseSelect);
           if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
           if (doSearch && like) {
+            const normLike = `%${normalized}%`;
             query = query.or(
-              `uid.ilike.${like},name.ilike.${like},brand.ilike.${like},model.ilike.${like},notes.ilike.${like}`
+              `uid.ilike.${like},name.ilike.${like},brand.ilike.${like},model.ilike.${like},notes.ilike.${like},uid.ilike.${normLike},name.ilike.${normLike},uid.ilike.${spaced},name.ilike.${spaced}`
             );
           }
           query = query.order("created_at", { ascending: false, nullsFirst: false }).range(range.start, range.end);
@@ -141,8 +144,9 @@ export default function InventoryPage() {
             .select("uid,name,brand,model,photo_url,classification,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
           if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
           if (doSearch && like) {
+            const normLike = `%${normalized}%`;
             query = query.or(
-              `uid.ilike.${like},name.ilike.${like},brand.ilike.${like},model.ilike.${like},notes.ilike.${like}`
+              `uid.ilike.${like},name.ilike.${like},brand.ilike.${like},model.ilike.${like},notes.ilike.${like},uid.ilike.${normLike},name.ilike.${normLike},uid.ilike.${spaced},name.ilike.${spaced}`
             );
           }
           query = query.order("created_at", { ascending: false, nullsFirst: false }).range(range.start, range.end);
@@ -157,8 +161,9 @@ export default function InventoryPage() {
             .select("uid,name,photo_url,classification,notes,quantity_total,unit,zone_id,bay_id,shelf_id,status,created_at,warehouse_id");
           if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
           if (doSearch && like) {
+            const normLike = `%${normalized}%`;
             query = query.or(
-              `uid.ilike.${like},name.ilike.${like},notes.ilike.${like}`
+              `uid.ilike.${like},name.ilike.${like},notes.ilike.${like},uid.ilike.${normLike},name.ilike.${normLike},uid.ilike.${spaced},name.ilike.${spaced}`
             );
           }
           query = query.order("created_at", { ascending: false, nullsFirst: false }).range(range.start, range.end);

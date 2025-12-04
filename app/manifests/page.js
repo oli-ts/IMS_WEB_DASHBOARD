@@ -25,50 +25,52 @@ export default function Manifests() {
     })();
   }, []);
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Active Manifests</h1>
-          <Link href="/manifests/new">
-          <Button variant="outline">New Manifest</Button>
-        </Link>
-      </div>
-      <div className="grid gap-2">
-	        {activeRows.map((m) => (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold">Active Manifests</h1>
+            <Link href="/manifests/new">
+            <Button variant="outline">New Manifest</Button>
+          </Link>
+        </div>
+        <div className="grid gap-2">
+  	        {activeRows.map((m) => (
           <Link
             key={m.id}
             href={`/manifests/${m.id}`}
             className="p-3 rounded-xl border dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:shadow-sm"
           >
-            <div className="font-medium">{m?.jobs?.name || "—"}</div>
+            <div className="font-medium">{m?.jobs?.name || "ƒ?\""}</div>
             <div className="text-sm text-neutral-500">
-              Van: {m?.vans?.reg_number || "—"} · Status: {m.status} ·{" "}
+              Van: {m?.vans?.reg_number || "\""} Status: {m.status} {" "}
               {new Date(m.created_at).toLocaleString()}
             </div>
           </Link>
         ))}
-	      </div>
-	      <div className="pt-4">
-	        <h2 className="text-lg font-semibold mb-2">Closed Manifests</h2>
-	        <div className="grid gap-2">
-	          {closedRows.length === 0 ? (
-	            <div className="text-sm text-neutral-500">No closed manifests.</div>
-	          ) : (
-	            closedRows.map((m) => (
-	              <Link
-	                key={m.id}
-	                href={`/manifests/${m.id}`}
-	                className="p-3 rounded-xl border dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:shadow-sm"
-	              >
-	                <div className="font-medium">{m?.jobs?.name || "�?"}</div>
-	                <div className="text-sm text-neutral-500">
-	                  Van: {m?.vans?.reg_number || "?"} | Status: {m.status} {" "} | 
-	                  {new Date(m.created_at).toLocaleString()}
-	                </div>
-	              </Link>
-	            ))
-	          )}
-	        </div>
-	      </div>
-	    </div>
+  	      </div>
+  	      <div className="pt-4">
+  	        <h2 className="text-lg font-semibold mb-2">Closed Manifests</h2>
+  	        <div className="grid gap-2">
+  	          {closedRows.length === 0 ? (
+  	            <div className="text-sm text-neutral-500">No closed manifests.</div>
+  	          ) : (
+  	            closedRows.map((m) => (
+  	              <Link
+  	                key={m.id}
+  	                href={`/manifests/${m.id}`}
+  	                className="p-3 rounded-xl border dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:shadow-sm"
+  	              >
+  	                <div className="font-medium">{m?.jobs?.name || "‹¨«?"}</div>
+  	                <div className="text-sm text-neutral-500">
+  	                  Van: {m?.vans?.reg_number || "?"} | Status: {m.status} {" "} | 
+  	                  {new Date(m.created_at).toLocaleString()}
+  	                </div>
+  	              </Link>
+  	            ))
+  	          )}
+  	        </div>
+  	      </div>
+  	    </div>
+    </div>
   );
 }

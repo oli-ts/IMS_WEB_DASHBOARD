@@ -202,6 +202,27 @@ export default function Transfers() {
         .select("uid,name,photo_url")
         .in("uid", uids);
       metaMap = Object.fromEntries((inv || []).map((r) => [r.uid, r]));
+
+      const missingAfterInv = uids.filter((u) => !metaMap[u]);
+      if (missingAfterInv.length) {
+        const { data: kits } = await sb
+          .from("inventory_kits")
+          .select("uid,name,photo_url")
+          .in("uid", missingAfterInv);
+        (kits || []).forEach((r) => {
+          metaMap[r.uid] = { uid: r.uid, name: r.name, photo_url: r.photo_url };
+        });
+      }
+      const missingAfterKits = uids.filter((u) => !metaMap[u]);
+      if (missingAfterKits.length) {
+        const { data: metals } = await sb
+          .from("metal_diamonds")
+          .select("uid,name,photo_url")
+          .in("uid", missingAfterKits);
+        (metals || []).forEach((r) => {
+          metaMap[r.uid] = { uid: r.uid, name: r.name, photo_url: r.photo_url };
+        });
+      }
     }
 
     return rows.map((r) => ({

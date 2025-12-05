@@ -71,18 +71,36 @@ function Droppable({ id, children }) {
   );
 }
 
-function Column({ title, containerId, manifest, setManifest, manifestOptions = [], items = [], otherSelection }) {
+function Column({
+  title,
+  containerId,
+  manifest,
+  setManifest,
+  manifestOptions = [],
+  items = [],
+  otherSelection,
+  onMerge,
+  mergeDisabled = false,
+  merging = false,
+}) {
   return (
     <div className="flex-1 bg-white dark:bg-neutral-900 rounded-xl border dark:border-neutral-800 p-3">
       <div className="mb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="font-semibold">{title}</div>
-          <Select
-            items={manifestOptions}
-            triggerLabel={manifest?.label || "Select manifest"}
-            onSelect={setManifest}
-            align="end"
-          />
+          <div className="flex items-center gap-2">
+            {onMerge ? (
+              <Button size="sm" variant="outline" disabled={mergeDisabled || merging} onClick={onMerge}>
+                {merging ? "Merging..." : "Merge into other"}
+              </Button>
+            ) : null}
+            <Select
+              items={manifestOptions}
+              triggerLabel={manifest?.label || "Select manifest"}
+              onSelect={setManifest}
+              align="end"
+            />
+          </div>
         </div>
         {otherSelection ? (
           <div className="text-xs text-neutral-500 mt-1">
@@ -148,6 +166,9 @@ export default function Transfers() {
   const [rightManifest, setRightManifest] = useState(null);
   const [leftItems, setLeftItems] = useState([]);
   const [rightItems, setRightItems] = useState([]);
+  const [mergeSide, setMergeSide] = useState(null); // 'left' or 'right'
+  const [lastMerge, setLastMerge] = useState(null); // { sourceId, targetId, operations: [] }
+  const [undoing, setUndoing] = useState(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   // Filter options so a selected manifest on one side can't be chosen on the other
@@ -374,12 +395,146 @@ export default function Transfers() {
     }
   }
 
+  async function mergeManifests(sourceSide) {
+    const sourceManifest = sourceSide === "left" ? leftManifest : rightManifest;
+    const targetManifest = sourceSide === "left" ? rightManifest : leftManifest;
+    if (!sourceManifest?.value || !targetManifest?.value) {
+      toast.error("Select both manifests before merging.");
+      return;
+    }
+    setMergeSide(sourceSide);
+    setLastMerge(null); // reset pending undo history until this succeeds
+    try {
+      const [sourceItems, targetItems] = await Promise.all([
+        loadManifestItems(sourceManifest.value),
+        loadManifestItems(targetManifest.value),
+      ]);
+
+      const targetByUid = new Map((targetItems || []).map((i) => [i.item_uid, i]));
+      const operations = [];
+
+      for (const item of sourceItems || []) {
+        const match = targetByUid.get(item.item_uid);
+        if (match) {
+          const newQty = Number(match.qty_required || 0) + Number(item.qty_required || 0);
+          const { error: updateError } = await sb
+            .from("manifest_items")
+            .update({ qty_required: newQty })
+            .eq("id", match.id);
+          if (updateError) throw updateError;
+          const { error: deleteError } = await sb.from("manifest_items").delete().eq("id", item.id);
+          if (deleteError) throw deleteError;
+          operations.push({
+            kind: "combine",
+            source: { ...item },
+            target: { ...match },
+          });
+        } else {
+          const { error: moveError } = await sb
+            .from("manifest_items")
+            .update({ manifest_id: targetManifest.value })
+            .eq("id", item.id);
+          if (moveError) throw moveError;
+          operations.push({
+            kind: "move",
+            item: { ...item },
+            from: sourceManifest.value,
+            to: targetManifest.value,
+          });
+        }
+      }
+
+      const [updatedLeft, updatedRight] = await Promise.all([
+        leftManifest?.value ? loadManifestItems(leftManifest.value) : Promise.resolve([]),
+        rightManifest?.value ? loadManifestItems(rightManifest.value) : Promise.resolve([]),
+      ]);
+      setLeftItems(updatedLeft);
+      setRightItems(updatedRight);
+      setLastMerge({
+        sourceId: sourceManifest.value,
+        targetId: targetManifest.value,
+        sourceLabel: sourceManifest.label,
+        targetLabel: targetManifest.label,
+        operations,
+      });
+      toast.success(`Merged ${sourceManifest.label || "source manifest"} into ${targetManifest.label || "target manifest"}`);
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to merge manifests");
+      const [refreshedLeft, refreshedRight] = await Promise.all([
+        leftManifest?.value ? loadManifestItems(leftManifest.value) : Promise.resolve([]),
+        rightManifest?.value ? loadManifestItems(rightManifest.value) : Promise.resolve([]),
+      ]);
+      setLeftItems(refreshedLeft);
+      setRightItems(refreshedRight);
+    } finally {
+      setMergeSide(null);
+    }
+  }
+
+  async function undoLastMerge() {
+    if (!lastMerge) {
+      toast.info("No merge to undo yet.");
+      return;
+    }
+    const selectedIds = new Set([leftManifest?.value, rightManifest?.value].filter(Boolean));
+    if (!selectedIds.has(lastMerge.sourceId) || !selectedIds.has(lastMerge.targetId) || selectedIds.size !== 2) {
+      toast.error("Select the same two manifests to undo the last merge.");
+      return;
+    }
+    setUndoing(true);
+    try {
+      for (const op of lastMerge.operations || []) {
+        if (op.kind === "combine") {
+          // Restore target qty to previous amount
+          const { error: upErr } = await sb
+            .from("manifest_items")
+            .update({ qty_required: op.target.qty_required })
+            .eq("id", op.target.id);
+          if (upErr) throw upErr;
+          // Recreate the source line that was deleted
+          const { error: insErr } = await sb.from("manifest_items").insert({
+            manifest_id: lastMerge.sourceId,
+            item_uid: op.source.item_uid,
+            qty_required: op.source.qty_required,
+            status: op.source.status || "pending",
+          });
+          if (insErr) throw insErr;
+        } else if (op.kind === "move") {
+          const { error: moveErr } = await sb
+            .from("manifest_items")
+            .update({ manifest_id: lastMerge.sourceId })
+            .eq("id", op.item.id);
+          if (moveErr) throw moveErr;
+        }
+      }
+      const [updatedLeft, updatedRight] = await Promise.all([
+        leftManifest?.value ? loadManifestItems(leftManifest.value) : Promise.resolve([]),
+        rightManifest?.value ? loadManifestItems(rightManifest.value) : Promise.resolve([]),
+      ]);
+      setLeftItems(updatedLeft);
+      setRightItems(updatedRight);
+      setLastMerge(null);
+      toast.success("Undid last merge.");
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to undo merge.");
+    } finally {
+      setUndoing(false);
+    }
+  }
+
   return (
     <DndContext sensors={sensors} onDragEnd={onDragEnd} collisionDetection={closestCorners}>
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">Transfers</h1>
-          <Button variant="outline" disabled>Changes auto-saved</Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={undoLastMerge} disabled={!lastMerge || mergeSide !== null || undoing}>
+              {undoing ? "Undoing..." : "Undo last merge"}
+            </Button>
+            <Button variant="outline" disabled>Changes auto-saved</Button>
+          </div>
         </div>
         <div className="grid md:grid-cols-2 gap-3">
           <Column
@@ -390,6 +545,9 @@ export default function Transfers() {
             manifestOptions={leftOptions}
             otherSelection={rightManifest?.label}
             items={leftItems}
+            onMerge={() => mergeManifests("left")}
+            mergeDisabled={!leftManifest?.value || !rightManifest?.value || !!mergeSide || undoing}
+            merging={mergeSide === "left"}
           />
           <Column
             title="To Manifest"
@@ -399,6 +557,9 @@ export default function Transfers() {
             manifestOptions={rightOptions}
             otherSelection={leftManifest?.label}
             items={rightItems}
+            onMerge={() => mergeManifests("right")}
+            mergeDisabled={!leftManifest?.value || !rightManifest?.value || !!mergeSide || undoing}
+            merging={mergeSide === "right"}
           />
         </div>
       </div>

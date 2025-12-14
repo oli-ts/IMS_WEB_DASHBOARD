@@ -14,6 +14,14 @@ import { CONDITION_OPTIONS, CONDITION_DB_CONST, getConditionOption, getCondition
 import { LiveStatusBadge } from "@/components/live-status-badge";
 import { QtyBadge } from "@/components/qty-badge";
 
+function formatBoxNumber(val) {
+  if (val === null || val === undefined) return "";
+  const raw = String(val).trim();
+  if (!raw) return "";
+  if (raw.length === 1) return raw.padStart(2, "0");
+  return raw;
+}
+
 export default function ItemDetailClient({ uid, openEdit = false }) {
   const sb = supabaseBrowser();
 
@@ -59,6 +67,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
   const [efSerial, setEfSerial] = useState("");
   const [efUnit, setEfUnit] = useState("pcs");
   const [efQty, setEfQty] = useState(0);
+  const [efBoxNumber, setEfBoxNumber] = useState("");
   const [efNotes, setEfNotes] = useState("");
   const [photoFile, setPhotoFile] = useState(null);
   const [photoAltFile, setPhotoAltFile] = useState(null);
@@ -222,7 +231,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
       const { data: items } = await sb
         .from("inventory_union")
         .select(
-          "source_table,id,uid,classification,name,brand,model,serial_number,photo_url,alt_photo_url,is_container,nested_parent_uid,condition,warehouse_id,zone_id,bay_id,shelf_id,location_last_seen,verified,qr_payload,notes,quantity_total,quantity_reserved,quantity_available,unit,status,assigned_to,created_at,updated_at"
+          "source_table,id,uid,classification,name,brand,model,serial_number,photo_url,alt_photo_url,is_container,nested_parent_uid,condition,warehouse_id,zone_id,bay_id,shelf_id,box_number,location_last_seen,verified,qr_payload,notes,quantity_total,quantity_reserved,quantity_available,unit,status,assigned_to,created_at,updated_at"
         )
         .eq("uid", uid)
         .limit(1);
@@ -250,7 +259,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
           const { data: kitRow } = await sb
             .from("inventory_kits")
             .select(
-              "id,uid,kit_id,name,description,photo_url,classification,notes,quantity_total,quantity_reserved,quantity_available,unit,warehouse_id,zone_id,bay_id,shelf_id,status,created_at,updated_at"
+              "id,uid,kit_id,name,description,photo_url,classification,notes,quantity_total,quantity_reserved,quantity_available,unit,warehouse_id,zone_id,bay_id,shelf_id,box_number,status,created_at,updated_at"
             )
             .eq("uid", uid)
             .maybeSingle();
@@ -693,8 +702,9 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
     if (zoneName || item?.zone_id) parts.push(`Zone ${zoneName || item?.zone_id}`);
     if (bayName || item?.bay_id) parts.push(`Bay ${bayName || item?.bay_id}`);
     if (shelfName || item?.shelf_id) parts.push(`Shelf ${shelfName || item?.shelf_id}`);
+    if (item?.box_number) parts.push(`Box ${formatBoxNumber(item.box_number)}`);
     return parts.length ? parts.join(" · ") : null;
-  }, [zoneName, bayName, shelfName, item?.zone_id, item?.bay_id, item?.shelf_id]);
+  }, [zoneName, bayName, shelfName, item?.zone_id, item?.bay_id, item?.shelf_id, item?.box_number]);
 
   return (
     <div className="space-y-6">
@@ -731,6 +741,7 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
                 setEfSerial(item.serial_number || "");
                 setEfUnit(item.unit || "pcs");
                 setEfQty(item.quantity_total ?? 0);
+                setEfBoxNumber(formatBoxNumber(item.box_number));
                 setEfNotes(item.notes || "");
                 setPhotoFile(null);
                 setPhotoAltFile(null);
@@ -950,12 +961,13 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
                   ) && (
                     <>
                       <Row label="On job (live)" value={fmtNum(qty.onJobs)} />
-                      <Row label="In warehouse (live)" value={fmtNum(qty.inWarehouse)} />
-                    </>
-                  )}
-                  {"reserved" in qty && <Row label="Reserved (legacy)" value={fmtNum(qty.reserved)} />}
-                  {"available" in qty && <Row label="Available (legacy)" value={fmtNum(qty.available)} />}
-                  <Row label="Unit" value={qty.unit} />
+                    <Row label="In warehouse (live)" value={fmtNum(qty.inWarehouse)} />
+                  </>
+                )}
+                {"reserved" in qty && <Row label="Reserved (legacy)" value={fmtNum(qty.reserved)} />}
+                {"available" in qty && <Row label="Available (legacy)" value={fmtNum(qty.available)} />}
+                <Row label="Unit" value={qty.unit} />
+                  <Row label="Box Number" value={formatBoxNumber(item?.box_number) || "—"} />
                   <Row
                     label="Baseline Qty"
                     value={
@@ -1235,13 +1247,13 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
           state={{
             whList, zoneList, bayList, shelfList,
             efClassification, efCondition, efWarehouse, efZone, efBay, efShelf,
-            efName, efBrand, efModel, efSerial, efUnit, efQty, efNotes,
+            efName, efBrand, efModel, efSerial, efUnit, efQty, efNotes, efBoxNumber,
             photoFile, photoAltFile, previewMain, previewAlt
           }}
           set={{
             setWhList, setZoneList, setBayList, setShelfList,
             setEfClassification, setEfCondition, setEfWarehouse, setEfZone, setEfBay, setEfShelf,
-            setEfName, setEfBrand, setEfModel, setEfSerial, setEfUnit, setEfQty, setEfNotes,
+            setEfName, setEfBrand, setEfModel, setEfSerial, setEfUnit, setEfQty, setEfNotes, setEfBoxNumber,
             setPhotoFile, setPhotoAltFile, setPreviewMain, setPreviewAlt
           }}
           sb={sb}
@@ -1363,13 +1375,13 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, is
   const {
     whList, zoneList, bayList, shelfList,
     efClassification, efCondition, efWarehouse, efZone, efBay, efShelf,
-    efName, efBrand, efModel, efSerial, efUnit, efQty, efNotes,
+    efName, efBrand, efModel, efSerial, efUnit, efQty, efNotes, efBoxNumber,
     photoFile, photoAltFile, previewMain, previewAlt
   } = state;
   const {
     setWhList, setZoneList, setBayList, setShelfList,
     setEfClassification, setEfCondition, setEfWarehouse, setEfZone, setEfBay, setEfShelf,
-    setEfName, setEfBrand, setEfModel, setEfSerial, setEfUnit, setEfQty, setEfNotes,
+    setEfName, setEfBrand, setEfModel, setEfSerial, setEfUnit, setEfQty, setEfNotes, setEfBoxNumber,
     setPhotoFile, setPhotoAltFile, setPreviewMain, setPreviewAlt
   } = set;
 
@@ -1499,6 +1511,15 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, is
             <div className="text-sm text-neutral-500">Shelf</div>
             <Select items={shelfList} triggerLabel={efShelf?.label || "Select shelf"} onSelect={setEfShelf} />
           </div>
+          <div className="space-y-1">
+            <div className="text-sm text-neutral-500">Box number</div>
+            <Input
+              value={efBoxNumber}
+              onChange={(e) => setEfBoxNumber(e.target.value)}
+              onBlur={() => setEfBoxNumber(formatBoxNumber(efBoxNumber))}
+              placeholder="e.g. 02"
+            />
+          </div>
 
           {/* Notes */}
           <div className="space-y-1 md:col-span-2">
@@ -1592,6 +1613,7 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, is
                     zone_id: efZone?.value || null,
                     bay_id: efBay?.value || null,
                     shelf_id: efShelf?.value || null,
+                    box_number: formatBoxNumber(efBoxNumber) || null,
                     name: efName || null,
                     brand: efBrand || null,
                     model: efModel || null,

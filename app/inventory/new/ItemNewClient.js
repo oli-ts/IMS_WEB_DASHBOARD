@@ -82,6 +82,7 @@ export default function ItemNewClient() {
   const [brand, setBrand] = useState("");
   const [model, setModel] = useState("");
   const [serial, setSerial] = useState("");
+  const [boxNumber, setBoxNumber] = useState("");
   const [unit, setUnit] = useState({ value: "pcs", label: "pcs" });
   const [qty, setQty] = useState(1);
   const [condition, setCondition] = useState(CONDITION_OPTIONS[0]);
@@ -108,6 +109,12 @@ export default function ItemNewClient() {
   const uidPrefix = selectedClass ? PREFIX[selectedClass] : null;
   const isMetalDiamond = selectedClass === "metal_diamonds";
   const canHaveAccessories = ["light_tooling", "heavy_tooling", "vehicles"].includes(selectedClass || "");
+  const formatBoxNumber = (val) => {
+    const raw = (val ?? "").toString().trim();
+    if (!raw) return "";
+    if (raw.length === 1) return raw.padStart(2, "0");
+    return raw;
+  };
 
   // Load warehouse list
   useEffect(() => {
@@ -277,6 +284,7 @@ export default function ItemNewClient() {
         zone_id: zone?.value || null,
         bay_id: bay?.value || null,
         shelf_id: shelf?.value || null,
+        box_number: formatBoxNumber(boxNumber) || null,
         name: name || null,
         brand: brand || null,
         model: model || null,
@@ -579,6 +587,15 @@ export default function ItemNewClient() {
                 items={shelfList}
                 triggerLabel={shelf?.label || "Select shelf"}
                 onSelect={setShelf}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm text-neutral-500">Box number</div>
+              <Input
+                placeholder="e.g. 02"
+                value={boxNumber}
+                onChange={(e) => setBoxNumber(e.target.value)}
+                onBlur={() => setBoxNumber(formatBoxNumber(boxNumber))}
               />
             </div>
 

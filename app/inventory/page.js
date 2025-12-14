@@ -44,6 +44,12 @@ export default function InventoryPage() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [prevItems, setPrevItems] = useState([]);
   const fetchRef = useRef(0);
+  const formatBoxNumber = (val) => {
+    const raw = (val ?? "").toString().trim();
+    if (!raw) return "";
+    if (raw.length === 1) return raw.padStart(2, "0");
+    return raw;
+  };
 
   function readCache(key) {
     if (typeof window === "undefined") return null;
@@ -117,7 +123,7 @@ export default function InventoryPage() {
         const spaced = `%${term.replace(/\s+/g, "%")}%`;
         const doSearch = Boolean(term);
         const baseSelect =
-          "uid,name,brand,model,photo_url,classification,condition,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at";
+          "uid,name,brand,model,photo_url,classification,condition,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,box_number,status,created_at";
         const range = doSearch
           ? { start: 0, end: 499 }
           : { start: (page - 1) * PAGE_SIZE, end: page * PAGE_SIZE - 1 };
@@ -141,7 +147,7 @@ export default function InventoryPage() {
         const fetchMetals = async () => {
           let query = sb
             .from("metal_diamonds")
-            .select("uid,name,brand,model,photo_url,classification,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,status,created_at");
+            .select("uid,name,brand,model,photo_url,classification,notes,quantity_total,quantity_available,unit,zone_id,bay_id,shelf_id,box_number,status,created_at");
           if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
           if (doSearch && like) {
             const normLike = `%${normalized}%`;
@@ -158,7 +164,7 @@ export default function InventoryPage() {
         const fetchKits = async () => {
           let query = sb
             .from("inventory_kits")
-            .select("uid,name,photo_url,classification,notes,quantity_total,unit,zone_id,bay_id,shelf_id,status,created_at,warehouse_id");
+            .select("uid,name,photo_url,classification,notes,quantity_total,unit,zone_id,bay_id,shelf_id,box_number,status,created_at,warehouse_id");
           if (warehouse?.value) query = query.eq("warehouse_id", warehouse.value);
           if (doSearch && like) {
             const normLike = `%${normalized}%`;
@@ -562,6 +568,7 @@ export default function InventoryPage() {
                     if (z) parts.push(`Zone: ${z}`);
                     if (b) parts.push(`Bay: ${b}`);
                     if (s) parts.push(`Shelf: ${s}`);
+                    if (i.box_number) parts.push(`Box: ${formatBoxNumber(i.box_number)}`);
                     return parts.length ? parts.join(" · ") : (i.location_last_seen || "-");
                   })()}
                 </div>
@@ -682,7 +689,7 @@ export default function InventoryPage() {
                       </td>
                       <td className="py-2 pr-3">{i.brand}</td>
                       <td className="py-2 pr-3">{i.quantity_total}</td>
-                      <td className="py-2 pr-3">{(() => { const parts = []; const z = zoneMap[i.zone_id]; const b = bayMap[i.bay_id]; const s = shelfMap[i.shelf_id]; if (z) parts.push(`Zone: ${z}`); if (b) parts.push(`Bay: ${b}`); if (s) parts.push(`Shelf: ${s}`); return parts.length ? parts.join(" · ") : (i.location_last_seen || "-"); })()}</td>
+                      <td className="py-2 pr-3">{(() => { const parts = []; const z = zoneMap[i.zone_id]; const b = bayMap[i.bay_id]; const s = shelfMap[i.shelf_id]; if (z) parts.push(`Zone: ${z}`); if (b) parts.push(`Bay: ${b}`); if (s) parts.push(`Shelf: ${s}`); if (i.box_number) parts.push(`Box: ${formatBoxNumber(i.box_number)}`); return parts.length ? parts.join(" · ") : (i.location_last_seen || "-"); })()}</td>
                       <td className="py-2 pr-3">
                         {(() => {
                           const cls = i.classification;

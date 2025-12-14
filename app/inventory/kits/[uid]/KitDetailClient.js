@@ -364,8 +364,12 @@ export default function KitDetailClient({ uid }) {
                 const zoneName = meta.zone_id ? kitItemLocationMap.zoneMap?.[meta.zone_id] : null;
                 const bayName = meta.bay_id ? kitItemLocationMap.bayMap?.[meta.bay_id] : null;
                 const shelfName = meta.shelf_id ? kitItemLocationMap.shelfMap?.[meta.shelf_id] : null;
-                const locParts = [zoneName && `Zone: ${zoneName}`, bayName && `Bay: ${bayName}`, shelfName && `Shelf: ${shelfName}`]
-                  .filter(Boolean);
+                const locParts = [
+                  zoneName && `Zone: ${zoneName}`,
+                  bayName && `Bay: ${bayName}`,
+                  shelfName && `Shelf: ${shelfName}`,
+                  meta.box_number ? `Box: ${meta.box_number.length === 1 ? meta.box_number.padStart(2, "0") : meta.box_number}` : null,
+                ].filter(Boolean);
                 const locDisplay = locParts.length ? locParts.join(" · ") : (meta.location_last_seen || "-");
                 return (
                   <div

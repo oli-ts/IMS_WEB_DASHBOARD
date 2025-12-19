@@ -790,7 +790,8 @@ export default function ItemDetailClient({ uid, openEdit = false }) {
                 const classOpt = CLASS_OPTIONS.find((o) => o.value === classVal) || null;
                 setEfClassification(classOpt);
 
-                const conditionOpt = getConditionOption(item.condition);
+                const isMetalDiamond = item.source_table === "metal_diamonds" || (item.classification || "").toUpperCase() === "METAL_DIAMOND";
+                const conditionOpt = isMetalDiamond ? null : getConditionOption(item.condition);
                 setEfCondition(conditionOpt);
 
                 setEditOpen(true);
@@ -1386,6 +1387,9 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, is
   } = set;
 
   if (!item) return null;
+  const isMetalDiamond =
+    item.source_table === "metal_diamonds" ||
+    (TABLE_CLASS_CONST[item.source_table] || item.classification || "").toUpperCase() === "METAL_DIAMOND";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -1409,17 +1413,19 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, is
           </div>
 
           {/* Condition */}
-          <div className="space-y-1">
-            <div className="text-sm text-neutral-500">Condition</div>
-            <Select
-              items={CONDITION_OPTIONS}
-              triggerLabel={efCondition?.label || "Select condition"}
-              onSelect={(opt) => setEfCondition(opt)}
-            />
-            <div className="text-xs text-neutral-500">
-              Same options as item creation: Good, Needs Maintenance, or Needs Repair.
+          {!isMetalDiamond && (
+            <div className="space-y-1">
+              <div className="text-sm text-neutral-500">Condition</div>
+              <Select
+                items={CONDITION_OPTIONS}
+                triggerLabel={efCondition?.label || "Select condition"}
+                onSelect={(opt) => setEfCondition(opt)}
+              />
+              <div className="text-xs text-neutral-500">
+                Same options as item creation: Good, Needs Maintenance, or Needs Repair.
+              </div>
             </div>
-          </div>
+          )}
 
           {/* UID (read-only) */}
           <div className="space-y-1">
@@ -1619,18 +1625,22 @@ function EditModal({ item, close, state, set, sb, TABLE_CLASS_CONST, onSaved, is
                     model: efModel || null,
                     serial_number: efSerial || null,
                     classification,
-                    condition: efCondition ? CONDITION_DB_CONST[efCondition.value] : null,
+                    condition: isMetalDiamond ? undefined : efCondition ? CONDITION_DB_CONST[efCondition.value] : null,
                     unit: efUnit || "pcs",
                     notes: efNotes || null,
                     quantity_total: Number(efQty) || 0,
                     photo_url,
                     alt_photo_url,
                   };
+                  const dbPayload = { ...payload };
+                  if (dbPayload.condition === undefined) delete dbPayload.condition;
 
-                  const { error } = await sb.from(table).update(payload).eq("id", id);
+                  const { error } = await sb.from(table).update(dbPayload).eq("id", id);
                   if (error) throw error;
 
-                  onSaved(payload);
+                  const patch = { ...payload };
+                  if (isMetalDiamond) patch.condition = null;
+                  onSaved(patch);
                   close();
                 } catch (err) {
                   console.error(err);

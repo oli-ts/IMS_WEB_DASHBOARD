@@ -116,6 +116,15 @@ export default function ItemNewClient() {
     return raw;
   };
 
+  // Metal diamonds should not capture condition; reset when switching classifications
+  useEffect(() => {
+    if (isMetalDiamond) {
+      if (condition) setCondition(null);
+    } else if (!condition) {
+      setCondition(CONDITION_OPTIONS[0]);
+    }
+  }, [isMetalDiamond, condition]);
+
   // Load warehouse list
   useEffect(() => {
     (async () => {
@@ -278,6 +287,8 @@ export default function ItemNewClient() {
         }
       }
 
+      const normalizedCondition = condition ? CONDITION_DB_CONST[condition.value] : null;
+
       const payload = {
         uid: finalUid,
         warehouse_id: warehouse?.value || null,
@@ -290,7 +301,7 @@ export default function ItemNewClient() {
         model: model || null,
         serial_number: serial || null,
         classification: CLASS_DB_CONST[selectedClass],
-        condition: condition ? CONDITION_DB_CONST[condition.value] : null,
+        condition: normalizedCondition,
         unit: unit?.value || "pcs",
         notes: notes || null,
         qr_payload: `CPG1|${finalUid}|${
@@ -315,13 +326,17 @@ export default function ItemNewClient() {
         if (!Number.isFinite(baselineHeightNumber)) {
           throw new Error("Baseline height is required for metal diamonds.");
         }
-        payload.baseline_height_mm = baselineHeightNumber;
-        payload.set_size = 9;
-        payload.unit = "set";
-        payload.case_uid = normalizedCaseUid || null;
-        payload.current_height_mm = baselineHeightNumber;
+        const metalPayload = {
+          ...payload,
+          baseline_height_mm: baselineHeightNumber,
+          set_size: 9,
+          unit: "set",
+          case_uid: normalizedCaseUid || null,
+          current_height_mm: baselineHeightNumber,
+        };
+        delete metalPayload.condition;
 
-        const { error: metalErr } = await sb.from("metal_diamonds").insert(payload);
+        const { error: metalErr } = await sb.from("metal_diamonds").insert(metalPayload);
         if (metalErr) throw metalErr;
 
         const { error: measErr } = await sb.from("metal_diamond_measurements").insert({
@@ -332,7 +347,11 @@ export default function ItemNewClient() {
         });
         if (measErr) throw measErr;
 
-        await sb.rpc("metal_diamond_apply_latest", { p_uid: finalUid }).catch(() => {});
+        try {
+          await sb.rpc("metal_diamond_apply_latest", { p_uid: finalUid });
+        } catch (e) {
+          console.warn("metal_diamond_apply_latest failed", e);
+        }
       } else {
         const { error } = await sb.from(table).insert(payload);
         if (error) throw error;
@@ -525,14 +544,16 @@ export default function ItemNewClient() {
             </div>
 
             {/* Condition */}
-            <div className="space-y-1">
-              <div className="text-sm text-neutral-500">Condition</div>
-              <Select
-                items={CONDITION_OPTIONS}
-                triggerLabel={condition?.label || "Select condition"}
-                onSelect={setCondition}
-              />
-            </div>
+            {!isMetalDiamond && (
+              <div className="space-y-1">
+                <div className="text-sm text-neutral-500">Condition</div>
+                <Select
+                  items={CONDITION_OPTIONS}
+                  triggerLabel={condition?.label || "Select condition"}
+                  onSelect={setCondition}
+                />
+              </div>
+            )}
 
             {/* Quantity / Unit */}
             <div className="space-y-1">

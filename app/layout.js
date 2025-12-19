@@ -2,6 +2,7 @@ import "./globals.css";
 import Providers from "./providers";
 import LayoutFrame from "../components/LayoutFrame";
 
+
 export const metadata = {
   title: "LoadOut - Concrete Polishing Group",
   description: "Inventory System, built by TradeScale",

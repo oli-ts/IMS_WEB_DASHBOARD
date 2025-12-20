@@ -210,7 +210,11 @@ export default function InventoryPage() {
           seen.add(k.uid);
         }
 
-        const merged = [...mergedBase, ...normalizedMetal];
+        const merged = [...mergedBase, ...normalizedMetal].sort((a, b) => {
+          const ta = new Date(a?.created_at || 0).getTime();
+          const tb = new Date(b?.created_at || 0).getTime();
+          return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+        });
         if (!cancelled && fetchRef.current === fetchId) {
           setItems(merged);
           setPrevItems(merged);
